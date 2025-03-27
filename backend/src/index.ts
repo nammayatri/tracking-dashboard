@@ -67,6 +67,23 @@ class MemoryCache {
 
 const cache = new MemoryCache();
 
+// Mapping tables cache
+interface DeviceVehicleMapping {
+  device_id: string;
+  vehicle_no: string;
+}
+
+interface VehicleRouteMapping {
+  vehicle_no: string;
+  route_id: string;
+}
+
+// Global caches for mapping tables to reduce database queries
+let deviceVehicleMap: Record<string, string> = {}; // device_id -> vehicle_no
+let vehicleRouteMap: Record<string, string> = {};  // vehicle_no -> route_id
+let mappingTablesLastUpdated = 0;
+const MAPPING_TABLES_REFRESH_INTERVAL = 15 * 60 * 1000; // 15 minutes
+
 // Initialize Clickhouse client
 const client = createClient({
   host: process.env.CLICKHOUSE_HOST || 'http://localhost:8123',
@@ -92,10 +109,65 @@ try {
   });
   
   console.log('PostgreSQL connection pool initialized');
+  
+  // Initial load of mapping tables
+  refreshMappingTables();
 } catch (error) {
   console.error('Failed to initialize PostgreSQL connection pool:', error);
   // Continue without PostgreSQL - the app will work without route information
 }
+
+// Function to refresh mapping tables from PostgreSQL
+async function refreshMappingTables() {
+  if (!pgPool) return;
+  
+  const now = Date.now();
+  // Only refresh if it's been more than the refresh interval since last update
+  if (now - mappingTablesLastUpdated < MAPPING_TABLES_REFRESH_INTERVAL) {
+    console.log('Mapping tables recently refreshed, skipping update');
+    return;
+  }
+  
+  console.log('Refreshing mapping tables from PostgreSQL');
+  
+  try {
+    // Fetch the device to vehicle mapping
+    const deviceVehicleResult = await pgPool.query<DeviceVehicleMapping>(
+      'SELECT device_id, vehicle_no FROM atlas_app.device_vehicle_mapping'
+    );
+    
+    // Update the device to vehicle map
+    const newDeviceVehicleMap: Record<string, string> = {};
+    deviceVehicleResult.rows.forEach(row => {
+      newDeviceVehicleMap[row.device_id] = row.vehicle_no;
+    });
+    deviceVehicleMap = newDeviceVehicleMap;
+    
+    console.log(`Loaded ${Object.keys(deviceVehicleMap).length} device-to-vehicle mappings`);
+    
+    // Fetch the vehicle to route mapping
+    const vehicleRouteResult = await pgPool.query<VehicleRouteMapping>(
+      'SELECT vehicle_no, route_id FROM atlas_app.vehicle_route_mapping'
+    );
+    
+    // Update the vehicle to route map
+    const newVehicleRouteMap: Record<string, string> = {};
+    vehicleRouteResult.rows.forEach(row => {
+      newVehicleRouteMap[row.vehicle_no] = row.route_id;
+    });
+    vehicleRouteMap = newVehicleRouteMap;
+    
+    console.log(`Loaded ${Object.keys(vehicleRouteMap).length} vehicle-to-route mappings`);
+    
+    // Update last refresh timestamp
+    mappingTablesLastUpdated = now;
+  } catch (error) {
+    console.error('Error refreshing mapping tables:', error);
+  }
+}
+
+// Set up a periodic refresh of mapping tables
+setInterval(refreshMappingTables, MAPPING_TABLES_REFRESH_INTERVAL);
 
 const OSRM_SERVER = process.env.OSRM_SERVER || 'https://router.project-osrm.org';
 
@@ -280,6 +352,9 @@ app.get('/api/vehicles', async (req: Request<{}, any, any, VehicleQuery>, res: R
     // Group points by deviceId
     const deviceMap: Record<string, VehicleData> = {};
     
+    // Refresh mapping tables if needed before processing vehicle data
+    await refreshMappingTables();
+    
     // Process each point
     for (const point of rawData) {
       const { deviceId: pointDeviceId, vehicleNumber, routeNumber, provider, lat, lng, timestamp } = point;
@@ -289,12 +364,18 @@ app.get('/api/vehicles', async (req: Request<{}, any, any, VehicleQuery>, res: R
       
       // Initialize device data if not exists
       if (!deviceMap[pointDeviceId]) {
+        // Look up vehicle number from device-vehicle mapping
+        const mappedVehicleNumber = deviceVehicleMap[pointDeviceId] || vehicleNumber;
+        
+        // Look up route ID from vehicle-route mapping (if we have a vehicle number)
+        const routeId = mappedVehicleNumber ? vehicleRouteMap[mappedVehicleNumber] || null : null;
+        
         deviceMap[pointDeviceId] = {
           deviceId: pointDeviceId,
-          vehicleNumber,
+          vehicleNumber: mappedVehicleNumber,
           routeNumber,
           provider,
-          routeId: null, // Will be populated from PostgreSQL
+          routeId,
           trail: []
         };
       }
@@ -310,79 +391,6 @@ app.get('/api/vehicles', async (req: Request<{}, any, any, VehicleQuery>, res: R
     // Convert map to array and filter vehicles without trail points
     const data = Object.values(deviceMap).filter(vehicle => vehicle.trail.length > 0);
     
-    // If we have data and PostgreSQL connection, fetch route information
-    if (data.length > 0 && pgPool !== null) {
-      try {
-        // Get all device IDs
-        const deviceIds = data.map(vehicle => vehicle.deviceId);
-        
-        try {
-          // First, get the vehicle IDs for each device
-          const deviceVehicleQuery = `
-            SELECT device_id, vehicle_no 
-            FROM atlas_app.device_vehicle_mapping 
-            WHERE device_id = ANY($1)
-          `;
-          
-          const deviceVehicleResult = await pgPool.query(deviceVehicleQuery, [deviceIds])
-            .catch(err => {
-              console.error('Error querying device_vehicle_mapping:', err.message);
-              return { rows: [] }; // Return empty result on error
-            });
-          
-          // Create a mapping from device ID to vehicle ID
-          const deviceToVehicleMap: Record<string, string> = {};
-          deviceVehicleResult.rows.forEach(row => {
-            deviceToVehicleMap[row.device_id] = row.vehicle_no;
-          });
-          
-          // Get vehicle IDs that we found
-          const vehicleIds = Object.values(deviceToVehicleMap);
-          
-          if (vehicleIds.length > 0) {
-            try {
-              // Then, get the route IDs for each vehicle
-              const vehicleRouteQuery = `
-                SELECT vehicle_no, route_id 
-                FROM atlas_app.vehicle_route_mapping 
-                WHERE vehicle_no = ANY($1)
-              `;
-              
-              const vehicleRouteResult = await pgPool.query(vehicleRouteQuery, [vehicleIds])
-                .catch(err => {
-                  console.error('Error querying vehicle_route_mapping:', err.message);
-                  return { rows: [] }; // Return empty result on error
-                });
-              
-              // Create a mapping from vehicle ID to route ID
-              const vehicleToRouteMap: Record<string, string> = {};
-              vehicleRouteResult.rows.forEach(row => {
-                vehicleToRouteMap[row.vehicle_no] = row.route_id;
-              });
-              
-              // Update our vehicle data with route IDs
-              data.forEach(vehicle => {
-                const vehicleNo = deviceToVehicleMap[vehicle.deviceId];
-                if (vehicleNo) {
-                  vehicle.routeId = vehicleToRouteMap[vehicleNo] || null;
-                  vehicle.vehicleNumber = vehicleNo;
-                }
-              });
-            } catch (routeQueryError) {
-              console.error('Error in route query:', routeQueryError);
-              // Continue without route information
-            }
-          }
-        } catch (deviceQueryError) {
-          console.error('Error in device query:', deviceQueryError);
-          // Continue without device mapping
-        }
-      } catch (pgError) {
-        console.error('Error fetching route data from PostgreSQL:', pgError);
-        // Continue without route information if there's an error
-      }
-    }
-
     // Set appropriate cache TTL based on request type
     let cacheTTL = 5 * 60 * 1000; // Default: 5 minutes for historical
     
@@ -577,6 +585,25 @@ app.get('/api/coverage/daily', async (req: Request, res: Response): Promise<void
     } else {
       res.status(500).json({ error: 'Failed to fetch coverage data' });
     }
+  }
+});
+
+// API endpoint to refresh mapping tables manually
+app.post('/api/mappings/refresh', async (req: Request, res: Response): Promise<void> => {
+  try {
+    await refreshMappingTables();
+    res.json({ 
+      success: true, 
+      message: 'Mapping tables refreshed successfully',
+      stats: {
+        deviceVehicleMappings: Object.keys(deviceVehicleMap).length,
+        vehicleRouteMappings: Object.keys(vehicleRouteMap).length,
+        lastUpdated: new Date(mappingTablesLastUpdated).toISOString()
+      }
+    });
+  } catch (error) {
+    console.error('Error refreshing mapping tables:', error);
+    res.status(500).json({ error: 'Failed to refresh mapping tables' });
   }
 });
 
