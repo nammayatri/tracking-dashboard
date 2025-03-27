@@ -1,0 +1,242 @@
+import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react';
+import { MapContainer, TileLayer, Marker, Popup, Polyline } from 'react-leaflet';
+import L from 'leaflet';
+import 'leaflet/dist/leaflet.css';
+import axios from 'axios';
+import './App.css';
+import {
+  Box,
+  Typography,
+  Paper,
+  Grid,
+  Card,
+  CardContent,
+  Button,
+  TextField,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
+  Table,
+  TableBody,
+  TableCell,
+  TableContainer,
+  TableHead,
+  TableRow,
+  FormControl,
+  Select,
+  MenuItem,
+  InputLabel,
+  SelectChangeEvent,
+  IconButton,
+  Alert,
+  Autocomplete,
+  Snackbar,
+  Slider,
+  InputAdornment,
+  CircularProgress,
+  Chip,
+  Divider,
+  LinearProgress,
+  ThemeProvider,
+  CssBaseline
+} from '@mui/material';
+import { createTheme } from '@mui/material/styles';
+import VehicleMarker from './components/VehicleMarker';
+import VehicleTrail from './components/VehicleTrail';
+import PlaybackControls from './components/PlaybackControls';
+import AnimatedVehicleMarker from './components/AnimatedVehicleMarker';
+import { AdapterDateFns } from '@mui/x-date-pickers/AdapterDateFns';
+import { LocalizationProvider } from '@mui/x-date-pickers/LocalizationProvider';
+import { DateTimePicker } from '@mui/x-date-pickers/DateTimePicker';
+import RefreshIcon from '@mui/icons-material/Refresh';
+import ClearIcon from '@mui/icons-material/Clear';
+import DirectionsIcon from '@mui/icons-material/Directions';
+import DirectionsBusIcon from '@mui/icons-material/DirectionsBus';
+import SignalWifiOffIcon from '@mui/icons-material/SignalWifiOff';
+import { useMap } from 'react-leaflet';
+import PlayArrowIcon from '@mui/icons-material/PlayArrow';
+import PauseIcon from '@mui/icons-material/Pause';
+import RestartAltIcon from '@mui/icons-material/RestartAlt';
+import FastForwardIcon from '@mui/icons-material/FastForward';
+import SpeedIcon from '@mui/icons-material/Speed';
+
+// ... keep the rest of the imports and component definition ...
+
+function MapController() {
+  const map = useMap();
+  
+  // Force map to invalidate size and recalculate dimensions
+  useEffect(() => {
+    setTimeout(() => {
+      map.invalidateSize();
+      // Store map reference in a global variable
+      (window as any).leafletMap = map;
+    }, 100);
+  }, [map]);
+  
+  return null;
+}
+
+function App() {
+  // ... keep all the state variables, effects and functions ...
+  
+  return (
+    <ThemeProvider theme={theme}>
+      <LocalizationProvider dateAdapter={AdapterDateFns}>
+        <CssBaseline />
+        <div className="app-container">
+          {/* Map Container */}
+          <div className="map-container">
+            {isLoading ? (
+              <Box
+                sx={{
+                  position: 'absolute',
+                  top: 0,
+                  left: 0,
+                  right: 0,
+                  bottom: 0,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  zIndex: 1000,
+                  backgroundColor: 'rgba(255, 255, 255, 0.7)',
+                }}
+              >
+                <CircularProgress />
+              </Box>
+            ) : null}
+            
+            {error && (
+              <Alert severity="error" sx={{ position: 'absolute', top: 10, left: 10, right: 10, zIndex: 1000 }}>
+                {error}
+              </Alert>
+            )}
+            
+            <MapContainer
+              center={[13.0022, 77.5800]}
+              zoom={12}
+              scrollWheelZoom={true}
+              style={{ height: "100%", width: "100%" }}
+              whenReady={(map) => {
+                // Store the map globally to access it from elsewhere
+                (window as any).leafletMap = map.target;
+              }}
+            >
+              {renderMapContent()}
+            </MapContainer>
+            
+            {/* Playback controls - only show when a vehicle is selected */}
+            {selectedVehicle && animationVehicle && (
+              <PlaybackControls
+                selectedVehicle={selectedVehicle}
+                animationVehicle={animationVehicle}
+                sortedTrailPoints={sortedTrailPoints}
+                playbackPosition={playbackPosition}
+                currentPointIndex={currentPointIndex}
+                isPlaying={isPlaying}
+                playbackSpeed={playbackSpeed}
+                onPlaybackPositionChange={handlePlaybackPositionChange}
+                onTogglePlayback={togglePlayback}
+                onResetPlayback={resetPlayback}
+                onSpeedChange={handleSpeedChange}
+                onClearSelection={() => setSelectedVehicle(null)}
+                formatPlaybackTime={formatPlaybackTime}
+                generateMockTrailPoints={generateMockTrailPoints}
+              />
+            )}
+            
+            {/* Vehicle Focus Indicator */}
+            {focusedVehicle && (
+              <Paper
+                elevation={3}
+                sx={{
+                  position: 'absolute',
+                  top: 16,
+                  left: 16,
+                  zIndex: 1000,
+                  p: 1,
+                  borderRadius: 2,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 1
+                }}
+              >
+                <Typography variant="body2" sx={{ fontWeight: 'medium' }}>
+                  <DirectionsBusIcon sx={{ verticalAlign: 'middle', mr: 0.5, fontSize: 18 }} />
+                  {vehicles.find(v => v.deviceId === focusedVehicle)?.vehicleNumber || 'Unknown'}
+                </Typography>
+                <Button 
+                  variant="outlined" 
+                  size="small" 
+                  onClick={clearFocus}
+                  startIcon={<ClearIcon />}
+                >
+                  Show All
+                </Button>
+              </Paper>
+            )}
+            
+            {/* Control Panel */}
+            <Paper 
+              elevation={3} 
+              sx={{
+                position: 'absolute',
+                top: 16,
+                right: 16,
+                zIndex: 1000,
+                width: 300,
+                p: 2,
+                borderRadius: 3,
+                maxHeight: 'calc(100vh - 32px)',
+                overflowY: 'auto'
+              }}
+            >
+              {/* ... keep all the control panel content ... */}
+            </Paper>
+          </div>
+          
+          {/* Dialogs and error messages */}
+          {/* Active Buses Table Dialog */}
+          <Dialog
+            open={showBusesTable}
+            onClose={() => setShowBusesTable(false)}
+            maxWidth="md"
+            fullWidth
+          >
+            {/* ... keep dialog content ... */}
+          </Dialog>
+          
+          {/* Routes Table Dialog */}
+          <Dialog
+            open={showRoutesTable}
+            onClose={() => setShowRoutesTable(false)}
+            maxWidth="md"
+            fullWidth
+          >
+            {/* ... keep dialog content ... */}
+          </Dialog>
+          
+          {/* Error Snackbar for route not found or vehicle not found */}
+          <Snackbar
+            open={showError}
+            autoHideDuration={4000}
+            onClose={handleCloseError}
+            message={routeError || vehicleError}
+            anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+          >
+            <Alert 
+              onClose={handleCloseError} 
+              severity="error" 
+              sx={{ width: '100%' }}
+            >
+              {routeError || vehicleError}
+            </Alert>
+          </Snackbar>
+        </div>
+      </LocalizationProvider>
+    </ThemeProvider>
+  );
+}
+
+export default App; 
