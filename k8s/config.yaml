@@ -1,0 +1,23 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-config
+  namespace: atlas
+data:
+  # Frontend configuration
+  NODE_ENV: "production"
+  VITE_API_URL: "/api"
+  VITE_BASE_URL: "https://app.example.com"
+  
+  # Backend configuration
+  BACKEND_PORT: "3000"
+  POSTGRES_HOST: "postgres"
+  POSTGRES_PORT: "5432"
+  POSTGRES_DB: "postgres"
+  CLICKHOUSE_HOST: "http://clickhouse:8123"
+  OSRM_SERVER: "https://router.project-osrm.org"
+  # Add any other configuration variables your application needs
+  # DB_HOST: "your-db-host"
+  # DB_PORT: "5432"
+  # REDIS_HOST: "your-redis-host"
+  # REDIS_PORT: "6379" 
