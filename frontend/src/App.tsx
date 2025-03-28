@@ -133,7 +133,7 @@ declare global {
 }
 
 // Constants
-const API_BASE_URL = 'https://api.moving.tech/tracking';
+const API_BASE_URL = 'http://localhost:3001';
 const DEFAULT_MAP_CENTER = { lat: 12.9716, lng: 77.5946 }; // Default fallback if no vehicles
 const MAX_POINT_DISTANCE_KM = 0.5; // Maximum distance in km between consecutive points in a trail
 const REFRESH_INTERVAL = 5 * 60 * 1000; // 5 minutes refresh interval for general data
@@ -208,33 +208,6 @@ const createTrailPointIcon = (color: string): L.DivIcon => {
   });
 };
 
-// Create a debounce function with cancel method
-function createDebouncedFunction<F extends (...args: any[]) => any>(
-  func: F,
-  waitFor: number
-): {
-  (...args: Parameters<F>): void;
-  cancel: () => void;
-} {
-  let timeout: ReturnType<typeof setTimeout> | null = null;
-
-  const debouncedFunction = (...args: Parameters<F>): void => {
-    if (timeout !== null) {
-      clearTimeout(timeout);
-    }
-    timeout = setTimeout(() => func(...args), waitFor);
-  };
-
-  debouncedFunction.cancel = () => {
-    if (timeout !== null) {
-      clearTimeout(timeout);
-      timeout = null;
-    }
-  };
-
-  return debouncedFunction;
-}
-
 // Create a simple debounce function
 const debounce = <F extends (...args: any[]) => any>(
   func: F,
@@ -250,25 +223,19 @@ const debounce = <F extends (...args: any[]) => any>(
   };
 };
 
-// Format timestamp for display
-const formatTimestamp = (timestamp: string): string => {
-  return new Date(timestamp).toLocaleString(undefined, {
-    dateStyle: 'short',
-    timeStyle: 'short'
-  });
-};
-
 // Add new types for the coverage data
 interface ProviderCoverage {
-  name: string;
-  totalVehicles: number;
-  coverage: number; // percentage of total fleet
+  provider: string;
+  deviceCount: number;
+  coverage: number;
 }
 
 interface DailyCoverage {
-  totalVehicles: number;
-  providers: ProviderCoverage[];
-  timestamp?: string;
+  totalDevices: number;
+  totalCoverage: number;
+  providerCoverage: ProviderCoverage[];
+  timestamp: string;
+  totalFleetSize?: number; // Add this field for total fleet size
 }
 
 // Function to calculate distance between two points using Haversine formula
@@ -302,9 +269,6 @@ function MapController() {
 }
 
 function App() {
-  // Map center state with a dedicated function to calculate it
-  const [mapCenter, setMapCenter] = useState<{ lat: number; lng: number }>(DEFAULT_MAP_CENTER);
-  
   // State variables
   const [vehicles, setVehicles] = useState<VehicleData[]>([]);
   const [selectedVehicle, setSelectedVehicle] = useState<string | null>(null);
@@ -316,11 +280,7 @@ function App() {
   const [coverageLoading, setCoverageLoading] = useState<boolean>(false);
   const [isLoading, setIsLoading] = useState<boolean>(true); // Only for initial load
   const [error, setError] = useState<string | null>(null);
-  const [focusedVehicle, setFocusedVehicle] = useState<VehicleData | null>(null);
-  const [isFollowingFocused, setIsFollowingFocused] = useState<boolean>(false);
-  
-  // Search inputs
-  const [searchInput, setSearchInput] = useState<string>('');
+  const [focusedVehicle, setFocusedVehicle] = useState<string | null>(null);
   
   // Table view states
   const [showBusesTable, setShowBusesTable] = useState<boolean>(false);
@@ -385,86 +345,34 @@ function App() {
   // Fix the TIME_SCALE constant to make animation work correctly
   // Time scale: 1 second playback = 60 seconds real time 
   const TIME_SCALE = 60;
-  
-  // Constants for refresh intervals
-  
 
-  // Add this type for the refresh interval
-  type TimeoutType = ReturnType<typeof setTimeout>;
-
-  // Update the refresh interval state to use useRef instead of useState
-  const focusedBusRefreshInterval = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  // Get color based on provider
-  const getVehicleColor = (provider: string | null): string => {
-    if (!provider) return PROVIDER_COLORS.default;
-    
-    const lowerProvider = provider.toLowerCase();
-    return PROVIDER_COLORS[lowerProvider] || PROVIDER_COLORS.default;
-  };
-
-  // Function to calculate the map center based on vehicles
-  const calculateMapCenter = useCallback(() => {
-    // If we're focused on a vehicle, keep the center on it
-    if (focusedVehicle && focusedVehicle.trail && focusedVehicle.trail.length > 0 && isFollowingFocused) {
-      return { lat: focusedVehicle.trail[0].lat, lng: focusedVehicle.trail[0].lng };
-    }
-    
-    // If we have vehicles, calculate the average position
-    if (vehicles.length > 0) {
-      const vehiclesWithTrail = vehicles.filter(v => v.trail && v.trail.length > 0);
-      
-      if (vehiclesWithTrail.length > 0) {
-        // Calculate average position from first points of each vehicle trail
-        const sum = vehiclesWithTrail.reduce(
-          (acc, vehicle) => {
-            if (vehicle.trail && vehicle.trail.length > 0) {
-              acc.lat += vehicle.trail[0].lat;
-              acc.lng += vehicle.trail[0].lng;
-              acc.count += 1;
-            }
-            return acc;
-          },
-          { lat: 0, lng: 0, count: 0 }
-        );
-        
-        if (sum.count > 0) {
-          return { lat: sum.lat / sum.count, lng: sum.lng / sum.count };
-        }
-      }
-    }
-    
-    // Default center if no vehicles or focused vehicle
-    return DEFAULT_MAP_CENTER;
-  }, [vehicles, focusedVehicle, isFollowingFocused]);
+  // Add state for controlling refresh intervals
+  const [focusedBusRefreshInterval, setFocusedBusRefreshInterval] = useState<ReturnType<typeof setInterval> | null>(null);
 
   // Function to convert local time to IST (for backend query)
   const convertToIST = (date: Date): Date => {
-    // IST is UTC+5:30
-    const istOffset = 5.5 * 60 * 60 * 1000; // 5.5 hours in milliseconds
-    return new Date(date.getTime() + istOffset - 60000);
-  };
-
-  // Format a date to IST string format matching backend
-  const formatDateToIST = (date: Date): string => {
-    const istDate = convertToIST(date);
-    console.log("istDate", istDate)
-    return istDate.toISOString().replace('T', ' ').split('.')[0];
+    // Create a new date object to avoid mutation
+    const istDate = new Date(date);
+    
+    // Get the timezone offset in minutes for the current locale
+    const localOffset = date.getTimezoneOffset();
+    
+    // IST is UTC+5:30, so offset is -330 minutes
+    const istOffset = -330;
+    
+    // Calculate the time difference in minutes
+    const diff = istOffset - localOffset;
+    
+    // Apply the difference to get IST time
+    istDate.setMinutes(istDate.getMinutes() + diff);
+    
+    return istDate;
   };
 
   // Function to check if a date is in the future
   const isFutureDate = (date: Date): boolean => {
     const now = new Date();
     return date > now;
-  };
-  
-  // Function to check if two dates are the same day
-  const isSameDay = (date1: Date, date2: Date): boolean => {
-    return (
-      date1.getFullYear() === date2.getFullYear() &&
-      date1.getMonth() === date2.getMonth() &&
-      date1.getDate() === date2.getDate()
-    );
   };
 
   // Function to convert IST to local time (for display)
@@ -488,7 +396,6 @@ function App() {
   };
 
   // Function to fetch vehicle data
-  // All timestamps are sent to the backend in IST format (UTC+5:30)
   const fetchVehicles = async () => {
     try {
       setLoading(true);
@@ -510,25 +417,30 @@ function App() {
       const istStart = convertToIST(start);
       const istEnd = convertToIST(end);
       
-      // Format dates as strings in IST format for the backend
-      const istStartFormatted = formatDateToIST(start);
-      const istEndFormatted = formatDateToIST(end);
-      
       console.log('Fetching vehicles with time range:', { 
         local: { start, end, hour: selectedHour },
-        ist: { start: istStart, end: istEnd },
-        istFormatted: { start: istStartFormatted, end: istEndFormatted }
+        ist: { start: istStart, end: istEnd }
       });
       
       const response = await axios.get<VehicleData[]>(`${API_BASE_URL}/api/vehicles`, {
         params: {
-          startTime: istStartFormatted, // Use IST formatted string
-          endTime: istEndFormatted,     // Use IST formatted string
-          includeTrail: true            // Explicitly request trail data
+          startTime: istStart.toISOString(),
+          endTime: istEnd.toISOString(),
+          includeTrail: true // Explicitly request trail data
         }
       });
       
       console.log('Received vehicles data:', response.data.length, 'vehicles');
+      
+      // Check if any vehicles have trail data
+      const vehiclesWithTrail = response.data.filter(v => v.trail && v.trail.length > 0);
+      console.log(`${vehiclesWithTrail.length} vehicles have trail data`);
+      
+      if (vehiclesWithTrail.length > 0) {
+        const sampleVehicle = vehiclesWithTrail[0];
+        console.log(`Sample vehicle ${sampleVehicle.deviceId} has ${sampleVehicle.trail.length} trail points`);
+        console.log('First trail point:', JSON.stringify(sampleVehicle.trail[0]));
+      }
       
       // Update the time range state
       setStartTime(start);
@@ -579,65 +491,55 @@ function App() {
         ];
       }
       
-      // Update all state in one batch using the processed data
-      setVehicles(prevVehicles => processVehiclesData(prevVehicles, vehiclesData));
+      // Smooth transition by transitioning from existing positions
+      setVehicles(prevVehicles => {
+        const vehicleMap = new Map(prevVehicles.map(v => [v.deviceId, v]));
+        
+        // Process each vehicle from the response
+        const updatedVehicles = vehiclesData.map(newVehicle => {
+          const prevVehicle = vehicleMap.get(newVehicle.deviceId);
+          
+          // If this vehicle already exists, preserve its previous position for smooth transitions
+          if (prevVehicle && newVehicle.trail.length > 0 && prevVehicle.trail.length > 0) {
+            // Add prevPosition property to marker for smooth transitions
+            return {
+              ...newVehicle,
+              prevPosition: prevVehicle.trail[0]
+            };
+          }
+          
+          return newVehicle;
+        });
+        
+        console.log('Updated vehicles state with', updatedVehicles.length, 'vehicles');
+        
+        // Extract unique route IDs and route numbers
+        const routeSet = new Set<string>();
+        updatedVehicles.forEach(vehicle => {
+          if (vehicle.routeId) {
+            routeSet.add(vehicle.routeId);
+          } else if (vehicle.routeNumber) {
+            routeSet.add(vehicle.routeNumber);
+          }
+        });
+        
+        setAvailableRoutes(Array.from(routeSet).sort());
+        
+        // Update filtered vehicles if a route is selected
+        if (selectedRoute) {
+          const filtered = updatedVehicles.filter(vehicle => 
+            vehicle.routeId === selectedRoute || vehicle.routeNumber === selectedRoute
+          );
+          setFilteredVehicles(filtered);
+        }
+        
+        return updatedVehicles;
+      });
       
       // Turn off loading state
       setLoading(false);
       setIsLoading(false);
       setError(null);
-      
-      // Auto-pan to loaded vehicles if enabled and not focused on a specific vehicle
-      if (shouldAutoPanMap && !focusedVehicle) {
-        setTimeout(() => {
-          // Get map instance
-          const map = (window as any).leafletMap;
-          if (!map) return;
-          
-          console.log('Auto-panning map to show loaded vehicles');
-          
-          // If we only have one vehicle, center on it with a closer zoom
-          if (vehiclesData.length === 1 && vehiclesData[0].trail && vehiclesData[0].trail.length > 0) {
-            const vehicle = vehiclesData[0];
-            const position = [vehicle.trail[0].lat, vehicle.trail[0].lng];
-            map.setView(position, 15, { animate: true, duration: 1 });
-            return;
-          }
-          
-          // For multiple vehicles, create bounds to fit them all
-          try {
-            // Only include vehicles with trail data
-            const vehiclesWithTrail = vehiclesData.filter(v => v.trail && v.trail.length > 0);
-            
-            if (vehiclesWithTrail.length === 0) return;
-            
-            // Create a bounds object to contain all points
-            const bounds = L.latLngBounds([]);
-            
-            // Add all vehicle positions to the bounds
-            vehiclesWithTrail.forEach(vehicle => {
-              if (vehicle.trail && vehicle.trail.length > 0) {
-                bounds.extend([vehicle.trail[0].lat, vehicle.trail[0].lng]);
-              }
-            });
-            
-            // If bounds are valid (has points), fit the map to these bounds
-            if (bounds.isValid()) {
-              map.fitBounds(bounds, { 
-                padding: [50, 50], // Add padding around the bounds
-                maxZoom: 15,       // Don't zoom in too much
-                animate: true,
-                duration: 1
-              });
-            }
-          } catch (error) {
-            console.error('Error auto-panning map:', error);
-          }
-          
-          // Reset the flag after panning
-          setShouldAutoPanMap(false);
-        }, 200); // Slight delay to allow DOM to update
-      }
     } catch (error) {
       console.error('Error fetching vehicles:', error);
       setError(error instanceof Error ? error.message : 'Unknown error occurred');
@@ -646,286 +548,1043 @@ function App() {
     }
   };
   
-  // Optimize the fetchDailyCoverage function to reduce API calls
-  // Uses IST date (UTC+5:30) format for backend compatibility
-  const fetchDailyCoverage = async () => {
+  // Fix the fetchOfflineVehicles function to ensure it doesn't reset the count
+  const fetchOfflineVehicles = useCallback(async () => {
+    if (isUserInteracting) return; // Skip fetching if user is interacting with time inputs
+    
+    const now = new Date();
+    
+    // Calculate the current hour boundary
+    const currentHourEnd = new Date(now);
+    currentHourEnd.setMinutes(0);
+    currentHourEnd.setSeconds(0);
+    currentHourEnd.setMilliseconds(0);
+    currentHourEnd.setHours(currentHourEnd.getHours() + 1); // Next hour boundary
+    
+    // Calculate the previous hour boundary
+    const currentHourStart = new Date(currentHourEnd);
+    currentHourStart.setHours(currentHourStart.getHours() - 1); // Previous hour boundary
+    
+    // Calculate the recent period for active vehicles (last 5 minutes)
+    const lastFiveMinutes = new Date(now);
+    lastFiveMinutes.setMinutes(now.getMinutes() - 5);
+    
     try {
-      console.log('Fetching daily coverage');
+      console.log('Fetching offline vehicles data...');
+      console.log('Time range for hour data:', {
+        start: currentHourStart.toISOString(),
+        end: currentHourEnd.toISOString()
+      });
       
-      // Format the selected date in IST
-      const istDateFormatted = formatDateToIST(new Date(selectedDate)).split(' ')[0]; // Get just the date part
-      
-      console.log('Using IST formatted date for coverage request:', istDateFormatted);
-      
-      const response = await axios.get(`${API_BASE_URL}/api/coverage/daily`, {
+      // All vehicles in the current hour
+      const hourResponse = await axios.get(`${API_BASE_URL}/api/vehicles`, {
         params: {
-          date: istDateFormatted
+          startTime: currentHourStart.toISOString(),
+          endTime: currentHourEnd.toISOString()
         }
       });
       
-      console.log('Received daily coverage data:', response.data);
-      
-      // Check if response data exists
-      if (!response.data) {
-        console.error('Empty response from coverage API');
-        return;
-      }
-      
-      // Backend returns a different format than expected
-      // Handling both possible response formats
-      let providers: ProviderCoverage[] = [];
-      let totalVehicles = 0;
-      
-      if (Array.isArray(response.data)) {
-        // Old format - array of provider objects
-        providers = response.data.map((item: any) => ({
-          name: item.provider || 'unknown',
-          totalVehicles: item.busesActive || 0,
-          coverage: totalFleetSize > 0 ? ((item.busesActive || 0) / totalFleetSize) * 100 : 0
-        }));
-        
-        // Calculate total vehicles
-        totalVehicles = providers.reduce((sum: number, item: ProviderCoverage) => sum + item.totalVehicles, 0);
-        
-        // Set fleet size if available
-        if (response.data.length > 0 && response.data[0].totalFleetSize) {
-          setTotalFleetSize(response.data[0].totalFleetSize);
+      // Current active vehicles (last 5 minutes)
+      const recentResponse = await axios.get(`${API_BASE_URL}/api/vehicles`, {
+        params: {
+          startTime: lastFiveMinutes.toISOString(),
+          endTime: now.toISOString()
         }
+      });
+      
+      // Validate response data before using it
+      const hourData = Array.isArray(hourResponse.data) ? hourResponse.data : [];
+      const recentData = Array.isArray(recentResponse.data) ? recentResponse.data : [];
+      
+      const hourVehicleIds = new Set(hourData.map((v: VehicleData) => v.deviceId));
+      const recentVehicleIds = new Set(recentData.map((v: VehicleData) => v.deviceId));
+      
+      // Find offline vehicle IDs (active in last hour but not in last 5 minutes)
+      const offlineIds = [...hourVehicleIds].filter(id => !recentVehicleIds.has(id));
+      
+      // Log what's happening with offline vehicles count
+      console.log(`Offline vehicles calculation:`, {
+        hourVehiclesCount: hourData.length,
+        recentVehiclesCount: recentData.length,
+        offlineCount: offlineIds.length
+      });
+      
+      // Only update state if we get valid results (avoid resetting to 0 on errors)
+      if (hourData.length > 0) {
+        setOfflineVehicleIds(new Set(offlineIds));
+        setOfflineVehicles(offlineIds.length);
       } else {
-        // New format - object with providerCoverage array
-        if (response.data.totalDevices) {
-          setTotalFleetSize(response.data.totalDevices);
-        }
-        
-        if (Array.isArray(response.data.providerCoverage)) {
-          providers = response.data.providerCoverage.map((item: any) => ({
-            name: item.provider || 'unknown',
-            totalVehicles: item.deviceCount || 0,
-            coverage: item.coverage || 0
-          }));
-          
-          // Calculate total from providers if not provided
-          totalVehicles = providers.reduce((sum: number, item: ProviderCoverage) => sum + item.totalVehicles, 0);
-        }
+        console.log('No hour data vehicles received, keeping previous offline count');
       }
-      
-      // Convert response to match the DailyCoverage interface
-      const coverageData: DailyCoverage = {
-        totalVehicles,
-        providers,
-        timestamp: new Date().toISOString()
-      };
-      
-      setDailyCoverage(coverageData);
     } catch (error) {
-      console.error('Error fetching daily coverage:', error);
+      console.error('Error calculating offline vehicles:', error);
+      // Don't update the state on error to keep the previous value
     }
-  };
-  
-  // Function to fetch data for a specific focused vehicle
-  // Uses IST time format (UTC+5:30) for backend query consistency
-  const fetchFocusedVehicle = async () => {
-    if (!focusedVehicle) return;
+  }, [isUserInteracting, API_BASE_URL]);
+
+  // Create debounced version of fetchVehicles for time changes
+  const debouncedFetchData = useMemo(
+    () => debounce(() => {
+      setIsUserInteracting(false);
+      fetchVehicles();
+      fetchOfflineVehicles();
+    }, 800),
+    [fetchVehicles, fetchOfflineVehicles]
+  );
+
+  // Function to calculate map center based on vehicle locations
+  const calculateMapCenter = useCallback(() => {
+    if (!vehicles.length) return DEFAULT_MAP_CENTER;
+    
+    // Calculate the center based on available vehicle positions
+    let sumLat = 0;
+    let sumLng = 0;
+    let count = 0;
+    
+    vehicles.forEach(vehicle => {
+      if (vehicle.trail.length > 0) {
+        sumLat += vehicle.trail[0].lat;
+        sumLng += vehicle.trail[0].lng;
+        count++;
+      }
+    });
+    
+    if (count === 0) return DEFAULT_MAP_CENTER;
+    
+    return {
+      lat: sumLat / count,
+      lng: sumLng / count
+    };
+  }, [vehicles]);
+
+  // Get the calculated map center
+  const mapCenter = calculateMapCenter();
+
+  // Update fetchDailyCoverage to also fetch total fleet size
+  const fetchDailyCoverage = useCallback(async () => {
+    if (isUserInteracting) return;
     
     try {
+      setCoverageLoading(true);
+      const response = await axios.get(`${API_BASE_URL}/api/coverage/daily`);
+      setDailyCoverage(response.data);
+      // Set total fleet size if available from the API
+      if (response.data && response.data.totalFleetSize) {
+        setTotalFleetSize(response.data.totalFleetSize);
+      }
+      setCoverageLoading(false);
+    } catch (error) {
+      console.error('Error fetching daily coverage:', error);
+      setCoverageLoading(false);
+    }
+  }, [isUserInteracting]);
+
+  // Fix the fetchFocusedVehicle function to prevent infinite loops
+  const fetchFocusedVehicle = useCallback(async (deviceId: string) => {
+    if (!deviceId) return;
+    
+    // Skip if user is interacting with time controls
+    if (isUserInteracting) return;
+    
+    try {
+      console.log(`Fetching focused vehicle: ${deviceId}`);
+      
       // Calculate time range using selected date and hour - always use full hour boundaries
       const start = new Date(selectedDate);
       start.setHours(selectedHour);
       start.setMinutes(0);
       start.setSeconds(0);
+      start.setMilliseconds(0);
       
       const end = new Date(selectedDate);
       end.setHours(selectedHour + 1);
       end.setMinutes(0);
       end.setSeconds(0);
+      end.setMilliseconds(0);
       
-      // Format dates in IST for backend queries
-      const istStartFormatted = formatDateToIST(start);
-      const istEndFormatted = formatDateToIST(end);
+      // Convert to IST for backend queries
+      const istStart = convertToIST(start);
+      const istEnd = convertToIST(end);
       
-      console.log('Fetching focused vehicle data:', { 
-        vehicleId: focusedVehicle.deviceId,
-        startTime: istStartFormatted,
-        endTime: istEndFormatted
-      });
-      
+      // Using a special parameter to bypass cache and get real-time data for this specific bus
       const response = await axios.get<VehicleData[]>(`${API_BASE_URL}/api/vehicles`, {
         params: {
-          deviceId: focusedVehicle.deviceId,
-          startTime: istStartFormatted,
-          endTime: istEndFormatted,
-          includeTrail: true
+          startTime: istStart.toISOString(),
+          endTime: istEnd.toISOString(),
+          deviceId: deviceId,
+          bypassCache: true
         }
       });
       
-      if (response.data.length > 0) {
-        // Update the focused vehicle with fresh data
-        setFocusedVehicle(response.data[0]);
+      if (response.data && response.data.length > 0) {
+        const focusedVehicleData = response.data[0];
         
-        // If we're following the focused vehicle, update the map center
-        if (isFollowingFocused && response.data[0].trail && response.data[0].trail.length > 0) {
-          setMapCenter({ 
-            lat: response.data[0].trail[0].lat, 
-            lng: response.data[0].trail[0].lng 
-          })
-        }
-      }
-    } catch (error) {
-      console.error('Error fetching focused vehicle data:', error);
-    }
-  };
-  
-  // Combined function to fetch data - replaces separate offline vehicle function
-  const fetchAllData = useCallback(async () => {
-    if (isUserInteracting) return; // Skip fetching if user is interacting with time inputs
-    
-    try {
-      // Run these in parallel with Promise.all to improve performance
-      await Promise.all([
-        fetchVehicles(),
-        fetchDailyCoverage()
-      ]);
-    } catch (error) {
-      console.error('Error in fetch all data:', error);
-    }
-  }, [isUserInteracting]);
-
-  // Update the handle focus function to start focused refreshes
-  const handleVehicleFocus = (vehicle: VehicleData | string) => {
-    if (typeof vehicle === 'string') {
-      // If a device ID string is passed
-      const foundVehicle = vehicles.find(v => v.deviceId === vehicle);
-      if (foundVehicle) {
-        setFocusedVehicle(foundVehicle);
-        // Use the proper mapCenter type format
-        setMapCenter({ 
-          lat: foundVehicle.trail[0]?.lat || DEFAULT_MAP_CENTER.lat, 
-          lng: foundVehicle.trail[0]?.lng || DEFAULT_MAP_CENTER.lng 
+        // Only update if data actually changed to avoid unnecessary re-renders
+        setVehicles(prevVehicles => {
+          const existingVehicleIndex = prevVehicles.findIndex(v => v.deviceId === deviceId);
+          if (existingVehicleIndex === -1) return prevVehicles; // Vehicle not found, don't update
+          
+          const existingVehicle = prevVehicles[existingVehicleIndex];
+          
+          // Check if the data is actually different
+          const hasNewTrailPoints = focusedVehicleData.trail.length !== existingVehicle.trail.length ||
+            JSON.stringify(focusedVehicleData.trail[0]) !== JSON.stringify(existingVehicle.trail[0]);
+          
+          // Only update if there are actual changes
+          if (!hasNewTrailPoints) {
+            console.log(`No changes detected for focused vehicle ${deviceId}, skipping update`);
+            return prevVehicles;
+          }
+          
+          console.log(`Updating focused vehicle ${deviceId} with new data`);
+          const updatedVehicles = [...prevVehicles];
+          updatedVehicles[existingVehicleIndex] = {
+            ...focusedVehicleData,
+            prevPosition: existingVehicle.trail[0] // Keep previous position for smooth animation
+          };
+          return updatedVehicles;
         });
       }
-    } else {
-      // If a VehicleData object is passed
-      setFocusedVehicle(vehicle);
-      // Use the proper mapCenter type format
-      setMapCenter({ 
-        lat: vehicle.trail[0]?.lat || DEFAULT_MAP_CENTER.lat, 
-        lng: vehicle.trail[0]?.lng || DEFAULT_MAP_CENTER.lng 
-      });
+    } catch (error) {
+      console.error(`Error fetching focused vehicle ${deviceId}:`, error);
     }
+  }, [API_BASE_URL, selectedDate, selectedHour, convertToIST, isUserInteracting]);
 
-    // Set up an interval to refresh the focused vehicle data
-    if (focusedBusRefreshInterval.current) {
-      clearInterval(focusedBusRefreshInterval.current);
-    }
+  // Fix the useEffect hook with proper dependencies to avoid the infinite API call loop
+  useEffect(() => {
+    console.log('App component mounted - initializing data fetching');
     
-    focusedBusRefreshInterval.current = setInterval(() => {
-      if (focusedVehicle && !isSliderMoving) {
-        fetchFocusedVehicle();
+    // Initial data fetch
+    fetchVehicles()
+      .then(() => fetchOfflineVehicles())
+      .then(() => fetchDailyCoverage())
+      .catch(err => console.error('Error in initial data fetch:', err));
+    
+    console.log('Setting up refresh interval');
+    
+    // Set up interval for periodic refresh
+    const intervalId = setInterval(() => {
+      // Only do background refreshes if user is not interacting with time controls
+      // and not focusing on a specific bus (which has its own refresh)
+      if (!isUserInteracting && !focusedVehicle) {
+        console.log('General refresh interval triggered');
+        
+        // Run these in parallel to avoid one failure affecting others
+        fetchVehicles().catch(err => console.error('Error refreshing vehicles:', err));
+        fetchOfflineVehicles().catch(err => console.error('Error refreshing offline vehicles:', err));
+        fetchDailyCoverage().catch(err => console.error('Error refreshing coverage data:', err));
       }
-    }, 10000); // Refresh every 10 seconds
+    }, REFRESH_INTERVAL);
+    
+    // Cleanup on unmount
+    return () => {
+      console.log('App component unmounting - cleaning up intervals');
+      clearInterval(intervalId);
+      if (focusedBusRefreshInterval) {
+        clearInterval(focusedBusRefreshInterval);
+      }
+    };
+  }, [focusedVehicle, isUserInteracting, focusedBusRefreshInterval]);
+
+  // Make sure to clean up focused bus interval when component unmounts
+  useEffect(() => {
+    return () => {
+      if (focusedBusRefreshInterval) {
+        clearInterval(focusedBusRefreshInterval);
+      }
+    };
+  }, []);
+
+  // Effect to center map on vehicle positions once they're loaded
+  useEffect(() => {
+    if (!vehicles.length) return;
+    
+    // Get the map instance from the global variable
+    const map = (window as any).leafletMap;
+    if (!map) return;
+    
+    // Calculate bounds based on all vehicle positions
+    const points: L.LatLngExpression[] = [];
+    vehicles.forEach(vehicle => {
+      if (vehicle.trail.length > 0) {
+        points.push([vehicle.trail[0].lat, vehicle.trail[0].lng]);
+      }
+    });
+    
+    if (points.length > 0) {
+      // Set view to fit all points if this is the first load
+      const bounds = L.latLngBounds(points);
+      map.fitBounds(bounds, { padding: [50, 50] });
+    }
+  }, [vehicles.length]);
+
+  // Handle marker click to select a vehicle (removed OSRM route calculation)
+  const handleMarkerClick = (vehicle: VehicleData) => {
+    if (selectedVehicle === vehicle.deviceId) {
+      // Deselect if clicking the same vehicle
+      setSelectedVehicle(null);
+    } else {
+      // Select the clicked vehicle
+      setSelectedVehicle(vehicle.deviceId);
+    }
   };
 
-  // Create debounced version of fetchAllData for time changes with cancel method
-  const debouncedFetchData = useMemo(
-    () => createDebouncedFunction(() => {
-      setIsUserInteracting(false);
-      fetchAllData();
-    }, 800),
-    [fetchAllData]
-  );
-  
-  // UseEffect for time selection changes
-  useEffect(() => {
-    console.log('Time selection changed:', { selectedDate, selectedHour });
-    console.log(selectedDate, selectedHour, debouncedFetchData, isPlaying);
+  // Get color and icon based on provider
+  const getVehicleColor = (provider: string | null): string => {
+    if (!provider) return PROVIDER_COLORS.default;
     
-    // User is now interacting with time controls
-    setIsUserInteracting(true);
+    const lowerProvider = provider.toLowerCase();
+    return PROVIDER_COLORS[lowerProvider as keyof typeof PROVIDER_COLORS] || PROVIDER_COLORS.default;
+  };
+
+  // Get marker icon based on whether it's selected or offline
+  const getMarkerIcon = (isSelected: boolean, isOffline: boolean): L.DivIcon => {
+    const color = isOffline ? '#EA4335' : '#1976d2'; // Default blue color if provider is unknown
     
-    // Stop any ongoing playback
-    if (isPlaying) {
-      stopPlayback();
+    // Highlight selected vehicle
+    if (isSelected) {
+      // Make the selected icon larger and with a different color border
+      return L.divIcon({
+        className: 'custom-marker',
+        html: `<div style="
+          background-color: white;
+          border: 3px solid ${color};
+          border-radius: 50%;
+          width: 16px;
+          height: 16px;
+          display: flex;
+          justify-content: center;
+          align-items: center;
+          box-shadow: 0 0 0 2px white;
+        "></div>`,
+        iconSize: [22, 22],
+        iconAnchor: [11, 11],
+      });
     }
     
-    // Trigger the debounced fetch after a delay
-    debouncedFetchData();
+    // Regular vehicle marker
+    return L.divIcon({
+      className: 'custom-marker',
+      html: `<div style="
+        background-color: ${color};
+        border-radius: 50%;
+        width: 10px;
+        height: 10px;
+        box-shadow: 0 0 0 2px white;
+      "></div>`,
+      iconSize: [14, 14],
+      iconAnchor: [7, 7],
+    });
+  };
+
+  // Format timestamp for display
+  const formatTimestamp = (timestamp: string): string => {
+    return new Date(timestamp).toLocaleString(undefined, {
+      dateStyle: 'short',
+      timeStyle: 'short'
+    });
+  };
+
+  // Handle slider change for the hour of day
+  const handleHourChange = (event: Event, newValue: number | number[]) => {
+    const hour = newValue as number;
     
-    // Clean up
-    return () => debouncedFetchData.cancel();
-  }, [selectedDate, selectedHour, isPlaying]);
-  
-  // Create debounced search handler with cancel method
-  const debouncedSearch = useMemo(
-    () => createDebouncedFunction((searchTerm: string) => {
-      console.log('Searching for vehicle:', searchTerm);
-      if (searchTerm) {
-        const matchedVehicles = vehicles.filter(vehicle => 
-          vehicle.vehicleNumber?.toUpperCase().includes(searchTerm) ||
-          vehicle.routeNumber?.toUpperCase().includes(searchTerm)
-        );
+    // Check if selected hour is in the future for today
+    const now = new Date();
+    const isToday = selectedDate.getDate() === now.getDate() &&
+                    selectedDate.getMonth() === now.getMonth() &&
+                    selectedDate.getFullYear() === now.getFullYear();
+    
+    if (isToday && hour > now.getHours()) {
+      // If trying to select a future hour today, limit to current hour
+      setSelectedHour(now.getHours());
+    } else {
+      setSelectedHour(hour);
+    }
+    
+    setIsUserInteracting(true);
+    debouncedFetchData();
+  };
+
+  // Format hour for slider display
+  const formatHour = (hour: number) => {
+    const ampm = hour >= 12 ? 'PM' : 'AM';
+    const hourDisplay = hour % 12 === 0 ? 12 : hour % 12;
+    return `${hourDisplay} ${ampm}`;
+  };
+
+  // Handle date change
+  const handleDateChange = (date: Date | null) => {
+    if (date) {
+      // Don't allow selection of future dates
+      if (isFutureDate(date)) {
+        const now = new Date();
+        now.setHours(0, 0, 0, 0); // Set to beginning of today
+        setSelectedDate(now);
         
-        console.log(`Found ${matchedVehicles.length} matching vehicles`);
-        setFilteredVehicles(matchedVehicles);
-        
-        // If we find exactly one match, focus on it
-        if (matchedVehicles.length === 1) {
-          handleVehicleFocus(matchedVehicles[0]);
+        // If today is selected and the hour is in the future, adjust it
+        if (selectedHour > new Date().getHours()) {
+          setSelectedHour(new Date().getHours());
         }
       } else {
-        // If search is cleared and a route is selected, show vehicles for that route
-        if (selectedRoute) {
-          const routeVehicles = vehicles.filter(v => 
-            v.routeId === selectedRoute || v.routeNumber === selectedRoute
-          );
-          setFilteredVehicles(routeVehicles);
+        setSelectedDate(date);
+      }
+      
+      setIsUserInteracting(true);
+      debouncedFetchData();
+    }
+  };
+  // VehicleMarker component for displaying a vehicle at its position
+  const VehicleMarker = ({ vehicle }: { vehicle: VehicleData }) => {
+    const map = useMap();
+    // Default to the latest position
+    const currentPosition = vehicle.trail.length > 0 
+      ? vehicle.trail[0] 
+      : { lat: 0, lng: 0, timestamp: new Date().toISOString() };
+    
+    const isOffline = offlineVehicleIds.has(vehicle.deviceId);
+    const isSelected = selectedVehicle === vehicle.deviceId;
+    
+    // Skip rendering regular marker if this vehicle is currently being animated
+    if (isPlaying && animationVehicle?.deviceId === vehicle.deviceId) {
+      return null;
+    }
+    
+    return (
+      <Marker
+        position={[currentPosition.lat, currentPosition.lng]}
+        icon={getMarkerIcon(isSelected, isOffline)}
+        eventHandlers={{
+          click: () => {
+            console.log('Marker clicked for vehicle:', vehicle.deviceId);
+            // When a marker is clicked, handle selection and centering
+            handleMarkerClick(vehicle);
+            handleVehicleSelect(vehicle.deviceId);
+          }
+        }}
+      >
+        <Popup>
+          <Typography variant="subtitle1" sx={{ fontWeight: 'bold' }}>
+            {vehicle.vehicleNumber || 'Unknown'}
+          </Typography>
+          {vehicle.routeNumber && (
+            <Typography variant="body2">
+              Route: {vehicle.routeNumber}
+            </Typography>
+          )}
+          {vehicle.routeId && (
+            <Typography variant="body2">
+              Route ID: {vehicle.routeId}
+            </Typography>
+          )}
+          {vehicle.provider && (
+            <Typography variant="body2">
+              Provider: {vehicle.provider}
+            </Typography>
+          )}
+          <Typography variant="body2">
+            Last updated: {new Date(currentPosition.timestamp).toLocaleTimeString()}
+          </Typography>
+          {isOffline && (
+            <Chip 
+              label="Offline" 
+              size="small" 
+              sx={{ 
+                bgcolor: '#ffebee', 
+                color: '#EA4335',
+                marginTop: 1
+              }} 
+            />
+          )}
+          
+          <Box sx={{ mt: 1 }}>
+            <Button 
+              size="small" 
+              variant="contained" 
+              fullWidth
+              onClick={() => handleVehicleSelect(vehicle.deviceId)}
+              startIcon={<PlayArrowIcon />}
+              color="primary"
+            >
+              {vehicle.trail.length > 1 ? 'Show Playback' : 'Show Details'}
+            </Button>
+            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', fontSize: '10px', textAlign: 'center', mt: 0.5 }}>
+              {vehicle.trail.length} trail points available
+            </Typography>
+          </Box>
+        </Popup>
+      </Marker>
+    );
+  };
+
+  // TrailPointMarker component to show individual points along a route
+  const TrailPointMarker = ({ point, color, index }: { point: TrailPoint; color: string; index: number }) => {
+    return (
+      <Marker
+        position={[point.lat, point.lng]}
+        icon={createTrailPointIcon(color)}
+        zIndexOffset={-100 + index} // Make sure latest points appear on top
+      >
+        <Popup>
+          <Typography variant="body2" sx={{ fontWeight: 'medium' }}>
+            Point #{index + 1}
+          </Typography>
+          <Typography variant="body2">
+            Time: {formatTimestamp(point.timestamp)}
+          </Typography>
+          <Typography variant="body2">
+            Coordinates: {point.lat.toFixed(6)}, {point.lng.toFixed(6)}
+          </Typography>
+        </Popup>
+      </Marker>
+    );
+  };
+
+  // Render vehicle trail with proper segmentation and individual points for selected vehicles
+  const renderVehicleTrail = (vehicle: VehicleData, isOffline: boolean) => {
+    // First, ensure trail points are sorted by timestamp (oldest to newest)
+    const sortedTrail = [...vehicle.trail].sort((a, b) => 
+      new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+    );
+    
+    const trailSegments: Array<[number, number][]> = [];
+    let currentSegment: [number, number][] = [];
+    
+    // Build segments based on sorted timestamps and distance threshold
+    for (let i = 0; i < sortedTrail.length; i++) {
+      const point: [number, number] = [sortedTrail[i].lat, sortedTrail[i].lng];
+      
+      if (i === 0) {
+        // Start a new segment with the first point
+        currentSegment = [point];
+      } else {
+        // Check distance from previous point
+        const prevPoint = sortedTrail[i-1];
+        const distance = calculateDistance(
+          prevPoint.lat, prevPoint.lng, 
+          sortedTrail[i].lat, sortedTrail[i].lng
+        );
+        
+        if (distance <= MAX_POINT_DISTANCE_KM) {
+          // Add to current segment if within threshold
+          currentSegment.push(point);
         } else {
-          // No search term and no route - show all vehicles
-          setFilteredVehicles([]);
+          // Distance too large, end current segment and start a new one
+          if (currentSegment.length > 0) {
+            trailSegments.push([...currentSegment]);
+          }
+          currentSegment = [point];
         }
       }
-    }, 400),
-    [vehicles, selectedRoute]
-  );
-  
-  // Optimize vehicle search with debounce
-  const handleSearchInputChange = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
-    const searchTerm = event.target.value.trim().toUpperCase();
-    setSearchInput(searchTerm);
-  }, []);
-  
-  // Update clear focus function
-  const clearVehicleFocus = useCallback(() => {
-    setFocusedVehicle(null);
-    setIsFollowingFocused(false);
-    
-    // Clear any existing refresh interval
-    if (focusedBusRefreshInterval.current) {
-      clearInterval(focusedBusRefreshInterval.current);
     }
-  }, [focusedBusRefreshInterval]);
+    
+    // Add the last segment if it has points
+    if (currentSegment.length > 0) {
+      trailSegments.push(currentSegment);
+    }
+    
+    const isSelected = selectedVehicle === vehicle.deviceId;
+    const trailColor = isOffline ? '#EA4335' : getVehicleColor(vehicle.provider);
+
+  return (
+    <>
+        {/* Draw the polyline for the trail */}
+        {trailSegments.map((segment, index) => (
+          <Polyline
+            key={`${vehicle.deviceId}-segment-${index}`}
+            positions={segment}
+            color={trailColor}
+            weight={isOffline ? 2 : 3}
+            opacity={isOffline ? 0.4 : 0.6}
+            dashArray={isOffline ? "4, 4" : undefined}
+          />
+        ))}
+        
+        {/* If the vehicle is selected, also render individual trail points with timestamps */}
+        {isSelected && sortedTrail.map((point, index) => (
+          <TrailPointMarker 
+            key={`${vehicle.deviceId}-point-${index}`} 
+            point={point} 
+            color={trailColor}
+            index={index}
+          />
+        ))}
+      </>
+    );
+  };
+
+  // Update the handleVehicleSelect function to ensure trail points are properly set
+  const handleVehicleSelect = (deviceId: string) => {
+    console.log(`Vehicle selected: ${deviceId}`);
+    
+    // First stop any existing playback
+    stopPlayback();
+    
+    // Set the vehicle as selected
+    setSelectedVehicle(deviceId);
+      
+    // Find selected vehicle
+    const foundVehicle = vehicles.find(v => v.deviceId === deviceId);
+    console.log(`Looking for vehicle with deviceId ${deviceId}`);
+    
+    if (foundVehicle) {
+      console.log(`Found vehicle ${deviceId} with ${foundVehicle.trail?.length || 0} trail points`);
+      
+      // Always set the animation vehicle first
+      setAnimationVehicle(foundVehicle);
+      
+      // Generate demo data if no trail points or only one point
+      if (!foundVehicle.trail || foundVehicle.trail.length < 2) {
+        console.log('Not enough trail points, generating mock data');
+        
+        // Start with existing point or default
+        const basePoint = foundVehicle.trail && foundVehicle.trail.length > 0 
+          ? foundVehicle.trail[0] 
+          : { 
+              lat: 12.9716, 
+              lng: 77.5946, 
+              timestamp: new Date().toISOString() 
+            };
+            
+        // Generate 10 mock trail points
+        const mockTrail = Array.from({ length: 10 }, (_, i) => {
+          return {
+            lat: Number(basePoint.lat) + (i * 0.0005),
+            lng: Number(basePoint.lng) + (i * 0.0005),
+            timestamp: new Date(Date.now() - (9-i) * 5 * 60000).toISOString()
+          };
+        });
+        
+        console.log(`Generated ${mockTrail.length} mock trail points`);
+        setSortedTrailPoints(mockTrail);
+        setCurrentPointIndex(0);
+        setPlaybackPosition(0);
+        
+        // Set the current timestamp for interpolation
+        if (mockTrail.length > 0) {
+          setCurrentTargetTimestamp(new Date(mockTrail[0].timestamp).getTime());
+        }
+        
+        // Auto-start playback after a short delay to allow state updates
+        setTimeout(() => {
+          console.log("Auto-starting playback with mock data");
+          startPlayback();
+        }, 500);
+        return;
+      }
+      
+      try {
+        // Create a safe copy with explicit number conversion to avoid issues
+        const trailCopy = foundVehicle.trail.map(point => ({
+          lat: typeof point.lat === 'string' ? parseFloat(point.lat) : Number(point.lat),
+          lng: typeof point.lng === 'string' ? parseFloat(point.lng) : Number(point.lng),
+          timestamp: point.timestamp
+        }));
+        
+        console.log(`Made trail copy with ${trailCopy.length} points`);
+        
+        // Sort trail points by timestamp (oldest to newest)
+        const sorted = [...trailCopy].sort((a, b) => {
+          const timeA = new Date(a.timestamp).getTime();
+          const timeB = new Date(b.timestamp).getTime();
+          return timeA - timeB; // This sorts from earliest to latest
+        });
+        
+        console.log(`Sorted ${sorted.length} trail points`);
+        
+        if (sorted.length >= 2) {
+          // Set sorted trail points and ensure currentPointIndex is reset
+          setSortedTrailPoints(sorted);
+          setCurrentPointIndex(0);
+          setPlaybackPosition(0);
+          
+          // Set the current timestamp for interpolation
+          if (sorted.length > 0) {
+            setCurrentTargetTimestamp(new Date(sorted[0].timestamp).getTime());
+          }
+          
+          // Auto-start playback after a short delay to allow state updates
+          setTimeout(() => {
+            console.log("Auto-starting playback with real data");
+            startPlayback();
+          }, 500);
+        } else {
+          // Not enough points after processing, generate mock data
+          console.log('Not enough valid trail points after processing, using mock data');
+          
+          const basePoint = sorted.length > 0 ? sorted[0] : {
+            lat: 12.9716, 
+            lng: 77.5946, 
+            timestamp: new Date().toISOString()
+          };
+          
+          const mockTrail = Array.from({ length: 10 }, (_, i) => {
+            return {
+              lat: basePoint.lat + (i * 0.0005),
+              lng: basePoint.lng + (i * 0.0005),
+              timestamp: new Date(Date.now() - (9-i) * 5 * 60000).toISOString()
+            };
+          });
+          
+          console.log(`Generated ${mockTrail.length} mock trail points`);
+          setSortedTrailPoints(mockTrail);
+          setCurrentPointIndex(0);
+          setPlaybackPosition(0);
+          
+          // Set the current timestamp for interpolation
+          if (mockTrail.length > 0) {
+            setCurrentTargetTimestamp(new Date(mockTrail[0].timestamp).getTime());
+          }
+          
+          // Auto-start playback after a short delay to allow state updates
+          setTimeout(() => {
+            console.log("Auto-starting playback with fallback mock data");
+            startPlayback();
+          }, 500);
+        }
+      } catch (error) {
+        console.error('Error processing trail points:', error);
+        
+        // Generate mock data on error
+        console.log('Error in trail processing, using mock data');
+        const mockTrail = Array.from({ length: 10 }, (_, i) => {
+          return {
+            lat: 12.9716 + (i * 0.0005),
+            lng: 77.5946 + (i * 0.0005),
+            timestamp: new Date(Date.now() - (9-i) * 5 * 60000).toISOString()
+          };
+        });
+        
+        setSortedTrailPoints(mockTrail);
+        setCurrentPointIndex(0);
+        setPlaybackPosition(0);
+        
+        // Set the current timestamp for interpolation
+        if (mockTrail.length > 0) {
+          setCurrentTargetTimestamp(new Date(mockTrail[0].timestamp).getTime());
+        }
+        
+        // Auto-start playback after a short delay to allow state updates
+        setTimeout(() => {
+          console.log("Auto-starting playback with error-fallback mock data");
+          startPlayback();
+        }, 500);
+      }
+    } else {
+      console.log(`Vehicle with ID ${deviceId} not found, using demo data`);
+      
+      // Create a placeholder vehicle since the real one wasn't found
+      const mockVehicle: VehicleData = {
+        deviceId: deviceId,
+        vehicleNumber: "DEMO-" + deviceId.substring(0, 4),
+        routeNumber: "DEMO",
+        routeId: null,
+        provider: "default",
+        trail: []
+      };
+      
+      // Set this as the animation vehicle
+      setAnimationVehicle(mockVehicle);
+      
+      // Generate mock data for demo
+      const mockTrail = Array.from({ length: 10 }, (_, i) => {
+        return {
+          lat: 12.9716 + (i * 0.0005),
+          lng: 77.5946 + (i * 0.0005),
+          timestamp: new Date(Date.now() - (9-i) * 5 * 60000).toISOString()
+        };
+      });
+      
+      setSortedTrailPoints(mockTrail);
+      setCurrentPointIndex(0);
+      setPlaybackPosition(0);
+      
+      // Set the current timestamp for interpolation
+      if (mockTrail.length > 0) {
+        setCurrentTargetTimestamp(new Date(mockTrail[0].timestamp).getTime());
+      }
+      
+      // Auto-start playback after a short delay to allow state updates
+      setTimeout(() => {
+        console.log("Auto-starting playback with not-found mock data");
+        startPlayback();
+      }, 500);
+    }
+  };
+
+  // Calculate total duration of the trail in milliseconds
+  const calculateTrailDuration = useCallback(() => {
+    if (sortedTrailPoints.length < 2) return 0;
+    
+    const startTime = new Date(sortedTrailPoints[0].timestamp).getTime();
+    const endTime = new Date(sortedTrailPoints[sortedTrailPoints.length - 1].timestamp).getTime();
+    
+    return endTime - startTime;
+  }, [sortedTrailPoints]);
   
-  // Function to stop playback
+  // Format playback time
+  const formatPlaybackTime = useCallback((positionPercent: number) => {
+    if (sortedTrailPoints.length < 2) return "00:00";
+    
+    const totalDuration = calculateTrailDuration();
+    const currentMs = (positionPercent / 100) * totalDuration;
+    
+    // Convert to minutes and seconds
+    const totalSeconds = Math.floor(currentMs / 1000);
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = totalSeconds % 60;
+    
+    return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+  }, [sortedTrailPoints, calculateTrailDuration]);
+  
+  // Improve playback to make it smooth and proportional to travel time
+  const startPlayback = useCallback(() => {
+    console.log("StartPlayback called with state:", {
+      hasAnimationVehicle: !!animationVehicle,
+      trailPointsLength: sortedTrailPoints.length,
+      currentPointIndex
+    });
+
+    // First clear any existing animation
+    if (animationRef.current !== null) {
+      console.log("Canceling existing animation");
+      clearInterval(animationRef.current);
+      animationRef.current = null;
+    }
+    
+    // Now check if we have valid data
+    if (!animationVehicle || sortedTrailPoints.length < 2) {
+      console.log("Cannot start playback: no valid data");
+      return;
+    }
+    
+    // If at the end, reset to beginning
+    if (currentPointIndex >= sortedTrailPoints.length - 1) {
+      console.log("Resetting playback to beginning");
+      setCurrentPointIndex(0);
+      setPlaybackPosition(0);
+    }
+    
+    console.log(`Starting playback with ${sortedTrailPoints.length} points`);
+    setIsPlaying(true);
+    
+    // Calculate total time range of the trail
+    const firstTimestamp = new Date(sortedTrailPoints[0].timestamp).getTime();
+    const lastTimestamp = new Date(sortedTrailPoints[sortedTrailPoints.length - 1].timestamp).getTime();
+    const totalDurationMs = lastTimestamp - firstTimestamp;
+    
+    console.log(`Trail spans ${totalDurationMs / 1000} seconds real time`);
+    
+    // Find time gaps between points to identify jumps
+    const timeGaps: number[] = [];
+    let maxGapMs = 0;
+    
+    for (let i = 1; i < sortedTrailPoints.length; i++) {
+      const prevTime = new Date(sortedTrailPoints[i-1].timestamp).getTime();
+      const currTime = new Date(sortedTrailPoints[i].timestamp).getTime();
+      const gap = currTime - prevTime;
+      timeGaps.push(gap);
+      maxGapMs = Math.max(maxGapMs, gap);
+    }
+    
+    // Consider a gap significant if it's more than 1 minute
+    const significantGapMs = 60000; 
+    console.log(`Maximum time gap: ${maxGapMs / 1000} seconds`);
+    
+    // Start time of the animation
+    const startTime = performance.now();
+    let lastUpdateTime = startTime;
+    
+    // Update interval - aim for smooth animation at ~60fps but only update visuals when needed
+    const interval = setInterval(() => {
+      const currentTime = performance.now();
+      const elapsedRealMs = currentTime - startTime;
+      
+      // Apply playback speed to get effective elapsed time
+      const effectiveElapsedMs = elapsedRealMs * playbackSpeed;
+      
+      // Calculate progress through total duration (0-1)
+      const rawProgress = Math.min(effectiveElapsedMs / (totalDurationMs / TIME_SCALE), 1);
+      
+      // Convert to target timestamp in the trail
+      const targetTimestamp = firstTimestamp + (rawProgress * totalDurationMs);
+      
+      // Save the current target timestamp for interpolation
+      setCurrentTargetTimestamp(targetTimestamp);
+      
+      // Find the points before and after this timestamp for interpolation
+      let beforeIndex = 0;
+      let afterIndex = 0;
+      
+      for (let i = 0; i < sortedTrailPoints.length - 1; i++) {
+        const pointTime = new Date(sortedTrailPoints[i].timestamp).getTime();
+        const nextPointTime = new Date(sortedTrailPoints[i+1].timestamp).getTime();
+        
+        if (pointTime <= targetTimestamp && nextPointTime >= targetTimestamp) {
+          beforeIndex = i;
+          afterIndex = i + 1;
+          break;
+        }
+      }
+      
+      // If we've reached the end
+      if (rawProgress >= 1) {
+        console.log("Playback complete");
+        setCurrentPointIndex(sortedTrailPoints.length - 1);
+        setPlaybackPosition(100);
+        setIsPlaying(false);
+        clearInterval(animationRef.current!);
+        animationRef.current = null;
+        return;
+      }
+      
+      // Calculate percentage through the playback
+      const newPosition = rawProgress * 100;
+      
+      // Check if we should handle a significant time gap
+      const timeGap = timeGaps[beforeIndex];
+      const isSignificantGap = timeGap > significantGapMs;
+      
+      // Determine if we need to quickly jump ahead (for large time gaps)
+      if (isSignificantGap) {
+        console.log(`Significant time gap at index ${beforeIndex}: ${timeGap / 1000}s`);
+        // Move to next point after the gap
+        beforeIndex = afterIndex;
+        afterIndex = Math.min(afterIndex + 1, sortedTrailPoints.length - 1);
+      }
+      
+      // Calculate position between the two points based on timestamp
+      if (beforeIndex !== afterIndex) {
+        const beforeTime = new Date(sortedTrailPoints[beforeIndex].timestamp).getTime();
+        const afterTime = new Date(sortedTrailPoints[afterIndex].timestamp).getTime();
+        const segmentProgress = (targetTimestamp - beforeTime) / (afterTime - beforeTime);
+        
+        // Interpolate position between the two points
+        const beforePoint = sortedTrailPoints[beforeIndex];
+        const afterPoint = sortedTrailPoints[afterIndex];
+        
+        // Only update if we're at a new point
+        if (currentPointIndex !== beforeIndex) {
+          console.log(`Moving to point ${beforeIndex} (${segmentProgress.toFixed(2)} toward ${afterIndex})`);
+          setCurrentPointIndex(beforeIndex);
+          
+          // Pan the map to the current point
+          const map = (window as any).leafletMap;
+          if (map) {
+            map.panTo([beforePoint.lat, beforePoint.lng], { animate: true, duration: 0.5 });
+          }
+        }
+      }
+      
+      // Update position indicator
+      setPlaybackPosition(newPosition);
+      
+    }, 16); // ~60fps update rate
+    
+    // Store the interval ID for cleanup
+    animationRef.current = interval as unknown as number;
+  }, [animationVehicle, sortedTrailPoints, currentPointIndex, playbackSpeed, TIME_SCALE]);
+
+  // Simplify stopPlayback as well
   const stopPlayback = useCallback(() => {
-    if (animationRef.current) {
-      cancelAnimationFrame(animationRef.current);
+    console.log("Stopping playback");
+    
+    if (animationRef.current !== null) {
+      clearInterval(animationRef.current);
       animationRef.current = null;
     }
     
     setIsPlaying(false);
-    setCurrentTargetTimestamp(null);
+  }, []);
+  
+  // Reset playback to beginning
+  const resetPlayback = useCallback(() => {
+    stopPlayback();
+    setPlaybackPosition(0);
     setCurrentPointIndex(0);
-    lastFrameTimeRef.current = null;
+  }, [stopPlayback]);
+  
+  // Toggle playback
+  const togglePlayback = useCallback(() => {
+    if (isPlaying) {
+      stopPlayback();
+    } else {
+      startPlayback();
+    }
+  }, [isPlaying, startPlayback, stopPlayback]);
+  
+  // Update handlePlaybackPositionChange to properly update the current point
+  const handlePlaybackPositionChange = useCallback((event: Event, newValue: number | number[]) => {
+    const position = newValue as number;
+    stopPlayback();
+    setPlaybackPosition(position);
     
-    console.log('Playback stopped and state reset');
+    // Explicitly calculate the current point index
+    if (sortedTrailPoints.length === 0) return;
+    
+    if (position <= 0) {
+      setCurrentPointIndex(0);
+      return;
+    }
+    
+    if (position >= 100) {
+      setCurrentPointIndex(sortedTrailPoints.length - 1);
+      return;
+    }
+    
+    const totalDuration = calculateTrailDuration();
+    console.log("Total duration:", totalDuration);
+    if (totalDuration === 0) {
+      setCurrentPointIndex(0);
+      return;
+    }
+    
+    const currentTimePosition = (position / 100) * totalDuration;
+    const startTime = new Date(sortedTrailPoints[0].timestamp).getTime();
+    const targetTime = startTime + currentTimePosition;
+    
+    // Find the closest point based on time
+    let closestIndex = 0;
+    let closestDiff = Number.MAX_SAFE_INTEGER;
+    
+    sortedTrailPoints.forEach((point, index) => {
+      const pointTime = new Date(point.timestamp).getTime();
+      const diff = Math.abs(pointTime - targetTime);
+      
+      if (diff < closestDiff) {
+        closestDiff = diff;
+        closestIndex = index;
+      }
+    });
+    
+    console.log(`Slider adjusted: position ${position.toFixed(1)}%, index ${closestIndex}/${sortedTrailPoints.length-1}`);
+    setCurrentPointIndex(closestIndex);
+    
+    // Pan the map to the selected point
+    if (closestIndex >= 0 && closestIndex < sortedTrailPoints.length) {
+      const currentPoint = sortedTrailPoints[closestIndex];
+      const map = (window as any).leafletMap;
+      if (map) {
+        map.panTo([currentPoint.lat, currentPoint.lng], { animate: true, duration: 0.5 });
+      }
+    }
+  }, [stopPlayback, sortedTrailPoints, calculateTrailDuration]);
+  
+  // Change playback speed
+  const handleSpeedChange = useCallback(() => {
+    // Cycle through speeds: 1x -> 2x -> 4x -> 1x
+    setPlaybackSpeed(prevSpeed => {
+      if (prevSpeed === 1) return 2;
+      if (prevSpeed === 2) return 4;
+      return 1;
+    });
   }, []);
   
   // Cleanup animation on unmount
   useEffect(() => {
-    // Clean up interval when component unmounts
     return () => {
-      if (focusedBusRefreshInterval.current) {
-        clearInterval(focusedBusRefreshInterval.current);
-        focusedBusRefreshInterval.current = null;
+      if (animationRef.current !== null) {
+        clearInterval(animationRef.current);
       }
     };
   }, []);
@@ -1031,9 +1690,9 @@ function App() {
     const positions = trailPoints.map(point => [point.lat, point.lng]);
     const currentPositions = positions.slice(0, currentIndex + 1);
     const futurePositions = positions.slice(currentIndex);
-
-  return (
-    <>
+    
+    return (
+      <>
         {/* Traveled path (solid, colored by provider) */}
         <Polyline
           positions={currentPositions as L.LatLngExpression[]}
@@ -1149,7 +1808,7 @@ function App() {
             <React.Fragment key={vehicle.deviceId}>
               {/* When a vehicle is selected but not playing, hide other vehicles to focus on the selected one */}
               {(!selectedVehicle || selectedVehicle === vehicle.deviceId) && (
-                <CustomVehicleMarker vehicle={vehicle} />
+                <VehicleMarker vehicle={vehicle} />
               )}
               
               {/* Show animated marker if this is the playback vehicle but not playing */}
@@ -1225,13 +1884,53 @@ function App() {
     });
   };
 
+  // Update the handle focus function to start focused refreshes
+  const handleVehicleFocus = useCallback((deviceId: string) => {
+    setFocusedVehicle(deviceId);
+    setSelectedVehicle(deviceId);
+    
+    // Find the vehicle and center the map on it
+    const vehicle = vehicles.find(v => v.deviceId === deviceId);
+    if (vehicle && vehicle.trail.length > 0) {
+      // Use the global map instance
+      const map = (window as any).leafletMap;
+      if (map) {
+        map.setView(
+          [vehicle.trail[0].lat, vehicle.trail[0].lng],
+          15, // Zoom level
+          { animate: true }
+        );
+      }
+    }
+    
+    // Clear any existing focused bus refresh interval
+    if (focusedBusRefreshInterval) {
+      clearInterval(focusedBusRefreshInterval);
+      setFocusedBusRefreshInterval(null);
+    }
+    
+    // Set up a new refresh interval for this focused bus
+    const intervalId = setInterval(() => {
+      // Only refresh if still the same focused bus and not user interacting with time
+      if (focusedVehicle === deviceId && !isUserInteracting) {
+        fetchFocusedVehicle(deviceId);
+      }
+    }, FOCUSED_BUS_REFRESH_INTERVAL);
+    
+    setFocusedBusRefreshInterval(intervalId);
+    
+    // Do an immediate fetch for the latest data
+    fetchFocusedVehicle(deviceId);
+  }, [vehicles, focusedVehicle, isUserInteracting, focusedBusRefreshInterval, fetchFocusedVehicle]);
+
   // Update the clear focus function to stop focused refreshes
   const clearFocus = useCallback(() => {
     setFocusedVehicle(null);
     
     // Clear focused bus refresh interval
-    if (focusedBusRefreshInterval.current) {
-      clearInterval(focusedBusRefreshInterval.current);
+    if (focusedBusRefreshInterval) {
+      clearInterval(focusedBusRefreshInterval);
+      setFocusedBusRefreshInterval(null);
     }
   }, [focusedBusRefreshInterval]);
 
@@ -1258,52 +1957,6 @@ function App() {
       setFilteredVehicles(filtered);
       setShowBusesTable(true);
       setShowRoutesTable(false);
-      
-      // Automatically pan the map to show all vehicles on this route
-      if (filtered.length > 0) {
-        setTimeout(() => {
-          // Get map instance
-          const map = (window as any).leafletMap;
-          if (!map) return;
-          
-          try {
-            // Only include vehicles with trail data
-            const vehiclesWithTrail = filtered.filter(v => v.trail && v.trail.length > 0);
-            
-            if (vehiclesWithTrail.length === 0) return;
-            
-            // If we only have one vehicle, center on it with a closer zoom
-            if (vehiclesWithTrail.length === 1 && vehiclesWithTrail[0].trail.length > 0) {
-              const vehicle = vehiclesWithTrail[0];
-              const position = [vehicle.trail[0].lat, vehicle.trail[0].lng];
-              map.setView(position, 15, { animate: true, duration: 1 });
-              return;
-            }
-            
-            // Create a bounds object to contain all points
-            const bounds = L.latLngBounds([]);
-            
-            // Add all vehicle positions to the bounds
-            vehiclesWithTrail.forEach(vehicle => {
-              if (vehicle.trail && vehicle.trail.length > 0) {
-                bounds.extend([vehicle.trail[0].lat, vehicle.trail[0].lng]);
-              }
-            });
-            
-            // If bounds are valid (has points), fit the map to these bounds
-            if (bounds.isValid()) {
-              map.fitBounds(bounds, { 
-                padding: [50, 50], // Add padding around the bounds
-                maxZoom: 15,       // Don't zoom in too much
-                animate: true,
-                duration: 1
-              });
-            }
-          } catch (error) {
-            console.error('Error auto-panning map:', error);
-          }
-        }, 100);
-      }
     } else {
       setFilteredVehicles([]);
     }
@@ -1356,7 +2009,7 @@ function App() {
     
     if (vehicle) {
       // Found the vehicle, focus on it
-      handleVehicleFocus(vehicle);
+      handleVehicleFocus(vehicle.deviceId);
       setSearchVehicle(''); // Clear search after finding
     } else {
       // Show error if vehicle not found
@@ -1399,643 +2052,6 @@ function App() {
     zoom: 12,
     scrollWheelZoom: true,
     style: { height: "100%", width: "100%" }
-  };
-
-  // Format hour for slider display
-  const formatHour = (hour: number) => {
-    const ampm = hour >= 12 ? 'PM' : 'AM';
-    const hourDisplay = hour % 12 === 0 ? 12 : hour % 12;
-    return `${hourDisplay} ${ampm}`;
-  };
-
-  // Additional functions for playback
-  const formatPlaybackTime = (positionPercent: number) => {
-    if (sortedTrailPoints.length < 2) return "00:00";
-    
-    const startTime = new Date(sortedTrailPoints[0].timestamp).getTime();
-    const endTime = new Date(sortedTrailPoints[sortedTrailPoints.length - 1].timestamp).getTime();
-    const totalDuration = endTime - startTime;
-    
-    const currentMs = (positionPercent / 100) * totalDuration;
-    
-    // Convert to minutes and seconds
-    const totalSeconds = Math.floor(currentMs / 1000);
-    const minutes = Math.floor(totalSeconds / 60);
-    const seconds = totalSeconds % 60;
-    
-    return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
-  };
-
-  // Handle date change
-  const handleDateChange = (date: Date | null) => {
-    if (date) {
-      // Don't allow selection of future dates
-      if (isFutureDate(date)) {
-        const now = new Date();
-        now.setHours(0, 0, 0, 0); // Set to beginning of today
-        setSelectedDate(now);
-        
-        // If today is selected and the hour is in the future, adjust it
-        if (selectedHour > new Date().getHours()) {
-          setSelectedHour(new Date().getHours());
-        }
-      } else {
-        setSelectedDate(date);
-      }
-      
-      // Enable auto-panning for the next data load
-      setShouldAutoPanMap(true);
-      setIsUserInteracting(true);
-    }
-  };
-
-  // Handle slider change for the hour of day
-  const handleHourChange = (event: Event, newValue: number | number[]) => {
-    const hour = newValue as number;
-    
-    // Check if selected hour is in the future for today
-    const now = new Date();
-    const isToday = selectedDate.getDate() === now.getDate() &&
-                    selectedDate.getMonth() === now.getMonth() &&
-                    selectedDate.getFullYear() === now.getFullYear();
-    
-    if (isToday && hour > now.getHours()) {
-      // If trying to select a future hour today, limit to current hour
-      setSelectedHour(now.getHours());
-    } else {
-      setSelectedHour(hour);
-    }
-    
-    // Enable auto-panning for the next data load
-    setShouldAutoPanMap(true);
-    setIsUserInteracting(true);
-  };
-
-  // Toggle playback
-  const togglePlayback = useCallback(() => {
-    if (isPlaying) {
-      stopPlayback();
-    } else {
-      startPlayback();
-    }
-  }, [isPlaying, stopPlayback]);
-
-  // Reset playback to beginning
-  const resetPlayback = useCallback(() => {
-    stopPlayback();
-    setPlaybackPosition(0);
-    setCurrentPointIndex(0);
-  }, [stopPlayback]);
-
-  // Change playback speed
-  const handleSpeedChange = useCallback(() => {
-    // Cycle through speeds: 1x -> 2x -> 4x -> 1x
-    setPlaybackSpeed(prevSpeed => {
-      if (prevSpeed === 1) return 2;
-      if (prevSpeed === 2) return 4;
-      return 1;
-    });
-  }, []);
-
-  // Update handlePlaybackPositionChange to properly update the current point
-  const handlePlaybackPositionChange = useCallback((event: Event, newValue: number | number[]) => {
-    const position = newValue as number;
-    stopPlayback();
-    setPlaybackPosition(position);
-    
-    // Explicitly calculate the current point index
-    if (sortedTrailPoints.length === 0) return;
-    
-    if (position <= 0) {
-      setCurrentPointIndex(0);
-      return;
-    }
-    
-    if (position >= 100) {
-      setCurrentPointIndex(sortedTrailPoints.length - 1);
-      return;
-    }
-    
-    // Calculate the total duration of the trail
-    const startTime = new Date(sortedTrailPoints[0].timestamp).getTime();
-    const endTime = new Date(sortedTrailPoints[sortedTrailPoints.length - 1].timestamp).getTime();
-    const totalDurationMs = endTime - startTime;
-    
-    if (totalDurationMs === 0) {
-      setCurrentPointIndex(0);
-      return;
-    }
-    
-    const currentTimePosition = (position / 100) * totalDurationMs;
-    const targetTime = startTime + currentTimePosition;
-    
-    // Find the closest point based on time
-    let closestIndex = 0;
-    let closestDiff = Number.MAX_SAFE_INTEGER;
-    
-    sortedTrailPoints.forEach((point, index) => {
-      const pointTime = new Date(point.timestamp).getTime();
-      const diff = Math.abs(pointTime - targetTime);
-      
-      if (diff < closestDiff) {
-        closestDiff = diff;
-        closestIndex = index;
-      }
-    });
-    
-    console.log(`Slider adjusted: position ${position.toFixed(1)}%, index ${closestIndex}/${sortedTrailPoints.length-1}`);
-    setCurrentPointIndex(closestIndex);
-    
-    // Pan the map to the selected point
-    if (closestIndex >= 0 && closestIndex < sortedTrailPoints.length) {
-      const currentPoint = sortedTrailPoints[closestIndex];
-      const map = (window as any).leafletMap;
-      if (map) {
-        map.panTo([currentPoint.lat, currentPoint.lng], { animate: true, duration: 0.5 });
-      }
-    }
-  }, [stopPlayback, sortedTrailPoints]);
-
-  // Function to start playback
-  const startPlayback = useCallback(() => {
-    console.log("StartPlayback called with state:", {
-      hasAnimationVehicle: !!animationVehicle,
-      trailPointsLength: sortedTrailPoints.length,
-      currentPointIndex
-    });
-
-    // First clear any existing animation
-    if (animationRef.current !== null) {
-      console.log("Canceling existing animation");
-      cancelAnimationFrame(animationRef.current);
-      animationRef.current = null;
-    }
-    
-    // Now check if we have valid data
-    if (!animationVehicle || sortedTrailPoints.length < 2) {
-      console.log("Cannot start playback: no valid data");
-      return;
-    }
-    
-    // If at the end, reset to beginning
-    if (currentPointIndex >= sortedTrailPoints.length - 1) {
-      console.log("Resetting playback to beginning");
-      setCurrentPointIndex(0);
-      setPlaybackPosition(0);
-    }
-    
-    console.log(`Starting playback with ${sortedTrailPoints.length} points`);
-    setIsPlaying(true);
-    
-    // Ensure the map is centered on the starting point of the playback
-    if (currentPointIndex >= 0 && currentPointIndex < sortedTrailPoints.length) {
-      const startPoint = sortedTrailPoints[currentPointIndex];
-      const map = (window as any).leafletMap;
-      if (map) {
-        map.setView([startPoint.lat, startPoint.lng], 15, { animate: true });
-      }
-    }
-    
-    // Calculate total time range of the trail
-    const firstTimestamp = new Date(sortedTrailPoints[0].timestamp).getTime();
-    const lastTimestamp = new Date(sortedTrailPoints[sortedTrailPoints.length - 1].timestamp).getTime();
-    const totalDurationMs = lastTimestamp - firstTimestamp;
-    
-    console.log(`Trail spans ${totalDurationMs / 1000} seconds real time`);
-    
-    // Find time gaps between points to identify jumps
-    const timeGaps: number[] = [];
-    let maxGapMs = 0;
-    
-    for (let i = 1; i < sortedTrailPoints.length; i++) {
-      const prevTime = new Date(sortedTrailPoints[i-1].timestamp).getTime();
-      const currTime = new Date(sortedTrailPoints[i].timestamp).getTime();
-      const gap = currTime - prevTime;
-      timeGaps.push(gap);
-      maxGapMs = Math.max(maxGapMs, gap);
-    }
-    
-    // Consider a gap significant if it's more than 1 minute
-    const significantGapMs = 60000; 
-    console.log(`Maximum time gap: ${maxGapMs / 1000} seconds`);
-    
-    // Start time of the animation
-    const startTime = performance.now();
-    let lastUpdateTime = startTime;
-    
-    // Animation frame function
-    const animate = (currentTime: number) => {
-      if (!isPlaying) return;
-      
-      const elapsedRealMs = currentTime - startTime;
-      
-      // Apply playback speed to get effective elapsed time
-      const effectiveElapsedMs = elapsedRealMs * playbackSpeed;
-      
-      // Calculate progress through total duration (0-1)
-      const rawProgress = Math.min(effectiveElapsedMs / (totalDurationMs / TIME_SCALE), 1);
-      
-      // Convert to target timestamp in the trail
-      const targetTimestamp = firstTimestamp + (rawProgress * totalDurationMs);
-      
-      // Save the current target timestamp for interpolation
-      setCurrentTargetTimestamp(targetTimestamp);
-      
-      // Find the points before and after this timestamp for interpolation
-      let beforeIndex = 0;
-      let afterIndex = 0;
-      
-      for (let i = 0; i < sortedTrailPoints.length - 1; i++) {
-        const pointTime = new Date(sortedTrailPoints[i].timestamp).getTime();
-        const nextPointTime = new Date(sortedTrailPoints[i+1].timestamp).getTime();
-        
-        if (pointTime <= targetTimestamp && nextPointTime >= targetTimestamp) {
-          beforeIndex = i;
-          afterIndex = i + 1;
-          break;
-        }
-      }
-      
-      // If we've reached the end
-      if (rawProgress >= 1) {
-        console.log("Playback complete");
-        setCurrentPointIndex(sortedTrailPoints.length - 1);
-        setPlaybackPosition(100);
-        setIsPlaying(false);
-        return;
-      }
-      
-      // Calculate percentage through the playback
-      const newPosition = rawProgress * 100;
-      
-      // Check if we should handle a significant time gap
-      if (beforeIndex < timeGaps.length) {
-        const timeGap = timeGaps[beforeIndex];
-        const isSignificantGap = timeGap > significantGapMs;
-        
-        // Determine if we need to quickly jump ahead (for large time gaps)
-        if (isSignificantGap) {
-          console.log(`Significant time gap at index ${beforeIndex}: ${timeGap / 1000}s`);
-          // Move to next point after the gap
-          beforeIndex = afterIndex;
-          afterIndex = Math.min(afterIndex + 1, sortedTrailPoints.length - 1);
-        }
-      }
-      
-      // Only update if we're at a new point
-      if (currentPointIndex !== beforeIndex) {
-        console.log(`Moving to point ${beforeIndex}`);
-        setCurrentPointIndex(beforeIndex);
-        
-        // Pan the map to the current point with smoother animation
-        const map = (window as any).leafletMap;
-        if (map) {
-          const currentPoint = sortedTrailPoints[beforeIndex];
-          
-          // Calculate where the next few points are heading to provide a better view
-          let lookAheadIndex = Math.min(beforeIndex + 3, sortedTrailPoints.length - 1);
-          const lookAheadPoint = sortedTrailPoints[lookAheadIndex];
-          
-          // Center slightly ahead of the current position to show where the vehicle is going
-          if (lookAheadPoint && currentPoint) {
-            // Calculate a position slightly ahead of the current position (20% of the way to the look-ahead point)
-            const panLat = currentPoint.lat + (lookAheadPoint.lat - currentPoint.lat) * 0.2;
-            const panLng = currentPoint.lng + (lookAheadPoint.lng - currentPoint.lng) * 0.2;
-            
-            // Pan with slight animation but not too slow to keep up with playback
-            map.panTo([panLat, panLng], { 
-              animate: true, 
-              duration: 0.3,
-              easeLinearity: 0.5
-            });
-          } else {
-            // If we can't look ahead, just center on the current point
-            map.panTo([currentPoint.lat, currentPoint.lng], { animate: true, duration: 0.3 });
-          }
-        }
-      }
-      
-      // Update position indicator
-      setPlaybackPosition(newPosition);
-      
-      // Request next frame
-      animationRef.current = requestAnimationFrame(animate);
-    };
-    
-    // Start the animation
-    animationRef.current = requestAnimationFrame(animate);
-  }, [animationVehicle, sortedTrailPoints, currentPointIndex, playbackSpeed, TIME_SCALE, isPlaying]);
-
-  // Add the handleVehicleSelect function
-  const handleVehicleSelect = (deviceId: string) => {
-    console.log(`Vehicle selected: ${deviceId}`);
-    
-    // First stop any existing playback
-    stopPlayback();
-    
-    // Set the vehicle as selected
-    setSelectedVehicle(deviceId);
-      
-    // Find selected vehicle
-    const foundVehicle = vehicles.find(v => v.deviceId === deviceId);
-    console.log(`Looking for vehicle with deviceId ${deviceId}`);
-    
-    if (foundVehicle) {
-      console.log(`Found vehicle ${deviceId} with ${foundVehicle.trail?.length || 0} trail points`);
-      
-      // Always set the animation vehicle first
-      setAnimationVehicle(foundVehicle);
-      
-      // Generate demo data if no trail points or only one point
-      if (!foundVehicle.trail || foundVehicle.trail.length < 2) {
-        console.log('Not enough trail points, generating mock data');
-        
-        // Start with existing point or default
-        const basePoint = foundVehicle.trail && foundVehicle.trail.length > 0 
-          ? foundVehicle.trail[0] 
-          : { 
-              lat: 12.9716, 
-              lng: 77.5946, 
-              timestamp: new Date().toISOString() 
-            };
-            
-        // Generate mock trail points
-        generateMockTrailPoints(basePoint, 10);
-        return;
-      }
-      
-      try {
-        // Create a safe copy and sort trail points by timestamp (oldest to newest)
-        const trailCopy = foundVehicle.trail.map(point => ({
-          lat: typeof point.lat === 'string' ? parseFloat(point.lat) : Number(point.lat),
-          lng: typeof point.lng === 'string' ? parseFloat(point.lng) : Number(point.lng),
-          timestamp: point.timestamp
-        }));
-        
-        const sorted = [...trailCopy].sort((a, b) => {
-          const timeA = new Date(a.timestamp).getTime();
-          const timeB = new Date(b.timestamp).getTime();
-          return timeA - timeB; // This sorts from earliest to latest
-        });
-        
-        console.log(`Sorted ${sorted.length} trail points`);
-        
-        if (sorted.length >= 2) {
-          // Set sorted trail points and ensure currentPointIndex is reset
-          setSortedTrailPoints(sorted);
-          setCurrentPointIndex(0);
-          setPlaybackPosition(0);
-          
-          // Set the current timestamp for interpolation
-          if (sorted.length > 0) {
-            setCurrentTargetTimestamp(new Date(sorted[0].timestamp).getTime());
-          }
-        } else {
-          // Not enough points after processing, generate mock data
-          console.log('Not enough valid trail points after processing, using mock data');
-          generateMockTrailPoints(trailCopy[0], 10);
-        }
-      } catch (error) {
-        console.error('Error processing trail points:', error);
-        
-        // Generate mock data on error
-        console.log('Error in trail processing, using mock data');
-        const mockPoint = { 
-          lat: 12.9716, 
-          lng: 77.5946, 
-          timestamp: new Date().toISOString() 
-        };
-        generateMockTrailPoints(mockPoint, 10);
-      }
-    } else {
-      console.log(`Vehicle with ID ${deviceId} not found, using demo data`);
-      
-      // Create a placeholder vehicle since the real one wasn't found
-      const mockVehicle: VehicleData = {
-        deviceId: deviceId,
-        vehicleNumber: "DEMO-" + deviceId.substring(0, 4),
-        routeNumber: "DEMO",
-        routeId: null,
-        provider: "default",
-        trail: []
-      };
-      
-      // Set this as the animation vehicle
-      setAnimationVehicle(mockVehicle);
-      
-      // Generate mock data for demo
-      const mockPoint = { 
-        lat: 12.9716, 
-        lng: 77.5946, 
-        timestamp: new Date().toISOString() 
-      };
-      generateMockTrailPoints(mockPoint, 10);
-    }
-  };
-
-  // UseEffect for search term changes
-  useEffect(() => {
-    debouncedSearch(searchInput);
-    return () => debouncedSearch.cancel();
-  }, [searchInput, debouncedSearch]);
-
-  // Create a custom VehicleMarker component within the App scope
-  const CustomVehicleMarker = ({ vehicle }: { vehicle: VehicleData }) => {
-    const isOffline = offlineVehicleIds.has(vehicle.deviceId);
-    const isSelected = selectedVehicle === vehicle.deviceId;
-    
-    // Create a marker icon based on vehicle properties
-    const getMarkerIcon = () => {
-      const color = isOffline ? '#EA4335' : getVehicleColor(vehicle.provider);
-      
-      // Highlight selected vehicle
-      if (isSelected) {
-        return L.divIcon({
-          className: 'custom-marker',
-          html: `<div style="
-            background-color: white;
-            border: 3px solid ${color};
-            border-radius: 50%;
-            width: 16px;
-            height: 16px;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            box-shadow: 0 0 0 2px white;
-          "></div>`,
-          iconSize: [22, 22],
-          iconAnchor: [11, 11]
-        });
-      }
-      
-      // Regular vehicle marker
-      return L.divIcon({
-        className: 'custom-marker',
-        html: `<div style="
-          background-color: ${color};
-          border-radius: 50%;
-          width: 10px;
-          height: 10px;
-          box-shadow: 0 0 0 2px white;
-        "></div>`,
-        iconSize: [14, 14],
-        iconAnchor: [7, 7]
-      });
-    };
-    
-    // Skip rendering if this vehicle is currently being animated
-    if (isPlaying && animationVehicle?.deviceId === vehicle.deviceId) {
-      return null;
-    }
-    
-    // Get the latest position
-    const currentPosition = vehicle.trail.length > 0 
-      ? vehicle.trail[0] 
-      : { lat: 0, lng: 0, timestamp: new Date().toISOString() };
-    
-    return (
-      <Marker
-        position={[currentPosition.lat, currentPosition.lng]}
-        icon={getMarkerIcon()}
-        eventHandlers={{
-          click: () => {
-            console.log('Marker clicked for vehicle:', vehicle.deviceId);
-            handleVehicleSelect(vehicle.deviceId);
-          }
-        }}
-      >
-        <Popup>
-          <Typography variant="subtitle1" sx={{ fontWeight: 'bold' }}>
-            {vehicle.vehicleNumber || 'Unknown'}
-          </Typography>
-          {vehicle.routeNumber && (
-            <Typography variant="body2">
-              Route: {vehicle.routeNumber}
-            </Typography>
-          )}
-          {vehicle.routeId && (
-            <Typography variant="body2">
-              Route ID: {vehicle.routeId}
-            </Typography>
-          )}
-          {vehicle.provider && (
-            <Typography variant="body2">
-              Provider: {vehicle.provider}
-            </Typography>
-          )}
-          <Typography variant="body2">
-            Last updated: {new Date(currentPosition.timestamp).toLocaleTimeString()}
-          </Typography>
-          {isOffline && (
-            <Chip 
-              label="Offline" 
-              size="small" 
-              sx={{ 
-                bgcolor: '#ffebee', 
-                color: '#EA4335',
-                marginTop: 1
-              }} 
-            />
-          )}
-          
-          <Box sx={{ mt: 1 }}>
-            <Button 
-              size="small" 
-              variant="contained" 
-              fullWidth
-              onClick={() => handleVehicleSelect(vehicle.deviceId)}
-              startIcon={<PlayArrowIcon />}
-              color="primary"
-            >
-              {vehicle.trail.length > 1 ? 'Show Playback' : 'Show Details'}
-            </Button>
-            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', fontSize: '10px', textAlign: 'center', mt: 0.5 }}>
-              {vehicle.trail.length} trail points available
-            </Typography>
-          </Box>
-        </Popup>
-      </Marker>
-    );
-  };
-
-  // Code to fix the vehicle finding in clearVehicleFocus
-  const getVehicleById = (id: string): VehicleData | undefined => {
-    return vehicles.find(v => v.deviceId === id);
-  };
-
-  // Add a state for tracking slider interaction
-  const [isSliderMoving, setIsSliderMoving] = useState<boolean>(false);
-
-  // Add this before fetchVehicles function
-  // State to track if map should auto-pan after loading
-  const [shouldAutoPanMap, setShouldAutoPanMap] = useState<boolean>(true);
-
-  // Process vehicles data efficiently with a single pass
-  const processVehiclesData = (prevVehicles: VehicleData[], newVehicles: VehicleData[]) => {
-    // Create lookup map for previous vehicles for O(1) access instead of O(n) search
-    const prevVehicleMap = new Map(prevVehicles.map(v => [v.deviceId, v]));
-    
-    // Extract route information during processing
-    const routeSet = new Set<string>();
-    const routesData: Record<string, VehicleData[]> = {};
-    
-    // Track offline vehicles
-    const currentTime = new Date();
-    const fiveMinutesAgo = new Date(currentTime.getTime() - 5 * 60 * 1000);
-    const hourAgo = new Date(currentTime.getTime() - 60 * 60 * 1000);
-    const offlineIds = new Set<string>();
-    
-    // Process each vehicle from the response with a single iteration
-    const updatedVehicles = newVehicles.map(newVehicle => {
-      // Get previous vehicle data for smooth transitions
-      const prevVehicle = prevVehicleMap.get(newVehicle.deviceId);
-      
-      // Add route information to sets
-      if (newVehicle.routeId) {
-        routeSet.add(newVehicle.routeId);
-        if (!routesData[newVehicle.routeId]) routesData[newVehicle.routeId] = [];
-        routesData[newVehicle.routeId].push(newVehicle);
-      } else if (newVehicle.routeNumber) {
-        routeSet.add(newVehicle.routeNumber);
-        if (!routesData[newVehicle.routeNumber]) routesData[newVehicle.routeNumber] = [];
-        routesData[newVehicle.routeNumber].push(newVehicle);
-      }
-      
-      // Check for offline status (has data in last hour but not in last 5 minutes)
-      if (newVehicle.trail.length > 0) {
-        const lastPointTime = new Date(newVehicle.trail[0].timestamp);
-        
-        if (lastPointTime > hourAgo && lastPointTime < fiveMinutesAgo) {
-          offlineIds.add(newVehicle.deviceId);
-        }
-      }
-      
-      // If this vehicle already exists, preserve its previous position for smooth transitions
-      if (prevVehicle && newVehicle.trail.length > 0 && prevVehicle.trail.length > 0) {
-        return {
-          ...newVehicle,
-          prevPosition: prevVehicle.trail[0]
-        };
-      }
-      
-      return newVehicle;
-    });
-    
-    console.log('Updated vehicles state with', updatedVehicles.length, 'vehicles');
-    
-    // Update route-related states in a batch
-    setAvailableRoutes(Array.from(routeSet).sort());
-    
-    // Update offline vehicles state
-    setOfflineVehicleIds(offlineIds);
-    setOfflineVehicles(offlineIds.size);
-    
-    // Update filtered vehicles if a route is selected
-    if (selectedRoute && routesData[selectedRoute]) {
-      setFilteredVehicles(routesData[selectedRoute]);
-    }
-    
-    return updatedVehicles;
   };
 
   return (
@@ -2317,17 +2333,17 @@ function App() {
             {dailyCoverage ? (
               <>
                 {/* Provider-wise daily coverage */}
-                {dailyCoverage.providers.map(providerData => (
-                  <Box key={providerData.name} sx={{ mb: 2 }}>
+                {dailyCoverage.providerCoverage.map(providerData => (
+                  <Box key={providerData.provider} sx={{ mb: 2 }}>
                     <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 0.5 }}>
                       <Box sx={{ display: 'flex', alignItems: 'center' }}>
                         <Typography variant="body2" sx={{ 
                           textTransform: 'capitalize',
                           fontWeight: 'medium'
                         }}>
-                          {providerData.name === 'amnex' ? 'Amnex' : 
-                           providerData.name === 'chalo' ? 'Chalo' : 
-                           providerData.name}
+                          {providerData.provider === 'amnex' ? 'Amnex' : 
+                           providerData.provider === 'chalo' ? 'Chalo' : 
+                           providerData.provider}
                         </Typography>
                       </Box>
                       <Typography variant="body2" sx={{ fontWeight: 'medium' }}>
@@ -2345,19 +2361,19 @@ function App() {
                           borderRadius: 3,
                           backgroundColor: 'rgba(0,0,0,0.05)',
                           '& .MuiLinearProgress-bar': {
-                            backgroundColor: PROVIDER_COLORS[providerData.name.toLowerCase()] || PROVIDER_COLORS.default
+                            backgroundColor: PROVIDER_COLORS[providerData.provider.toLowerCase()] || PROVIDER_COLORS.default
                           }
                         }}
                       />
                       <Typography variant="caption" color="text.secondary">
-                        {providerData.totalVehicles} buses
+                        {providerData.deviceCount} buses
                       </Typography>
                     </Box>
                   </Box>
                 ))}
                 
                 <Typography variant="caption" sx={{ display: 'block', mt: 0, mb: 2, color: 'text.secondary', fontSize: '10px' }}>
-                  Last updated: {dailyCoverage.timestamp ? new Date(dailyCoverage.timestamp).toLocaleString() : 'Unknown'}
+                  Last updated: {new Date(dailyCoverage.timestamp).toLocaleString()}
                 </Typography>
               </>
             ) : (
@@ -2464,7 +2480,7 @@ function App() {
               <Box sx={{ display: 'flex', alignItems: 'center', mr: 1 }}>
                 <DirectionsBusIcon sx={{ mr: 1, color: 'primary.main' }} />
                 <Typography variant="body2" sx={{ fontWeight: 'medium' }}>
-                  {focusedVehicle?.vehicleNumber || 'Unknown Vehicle'}
+                  {vehicles.find(v => v.deviceId === focusedVehicle)?.vehicleNumber || 'Unknown Vehicle'}
                 </Typography>
               </Box>
               <Button 
@@ -2559,8 +2575,8 @@ function App() {
                             variant="contained" 
                             onClick={() => {
                               setShowBusesTable(false);
-                              handleVehicleFocus(vehicle);
-                              handleVehicleSelect(vehicle.deviceId); // Keep only this line to trigger playback
+                              handleVehicleFocus(vehicle.deviceId);
+                              handleVehicleSelect(vehicle.deviceId); // Add this line to trigger playback
                             }}
                           >
                             View on Map

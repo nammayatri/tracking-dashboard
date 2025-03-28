@@ -1,5 +1,5 @@
 import express, { Request, Response } from 'express';
-import { createClient } from '@clickhouse/client';
+import { createClient, ResponseJSON } from '@clickhouse/client';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import axios from 'axios';
@@ -88,6 +88,10 @@ const MAPPING_TABLES_REFRESH_INTERVAL = 15 * 60 * 1000; // 15 minutes
 const client = createClient({
   host: process.env.CLICKHOUSE_HOST || 'http://localhost:8123',
   username: process.env.CLICKHOUSE_USER,
+  compression: {
+    response: true,
+    request: true,
+  },
   password: process.env.CLICKHOUSE_PASSWORD,
 });
 
@@ -185,21 +189,6 @@ interface VehicleQuery {
   bypassCache?: string;
 }
 
-interface ClickHousePoint {
-  '1'?: number | string;
-  '2'?: number | string;
-  '3'?: string;
-  lat?: number | string;
-  long?: number | string;
-  timestamp?: string;
-}
-
-interface VehiclePoint {
-  lat: number;
-  lng: number;
-  timestamp: string;
-}
-
 interface VehicleData {
   deviceId: string;
   vehicleNumber: string | null;
@@ -226,16 +215,16 @@ interface ClickHouseVehicleData {
 
 // Time utility functions
 function formatDateToIST(date: Date): string {
-  
+  const istT = convertToIST(date)
   // Format as YYYY-MM-DD HH:MM:SS
-  return date.toISOString().replace('T', ' ').split('.')[0];
+  return istT.toISOString().replace('T', ' ').split('.')[0];
 }
 
 // Convert UTC date to IST date
 function convertToIST(date: Date): Date {
   // IST is UTC+5:30
   const istOffset = 5.5 * 60 * 60 * 1000; // 5.5 hours in milliseconds
-  return new Date(date.getTime() + (istOffset + date.getTimezoneOffset() * 60 * 1000));
+  return new Date(date.getTime() + istOffset);
 }
 
 // Get current time in IST
@@ -281,6 +270,8 @@ app.get('/api/health', (req: Request, res: Response): void => {
 app.get('/api/vehicles', async (req: Request<{}, any, any, VehicleQuery>, res: Response): Promise<void> => {
   try {
     const { startTime, endTime, deviceId, bypassCache } = req.query;
+
+    console.log("startTime:", startTime)
     
     // Current timestamp for comparison - all times assumed to be in IST
     const now = new Date();
@@ -330,6 +321,9 @@ app.get('/api/vehicles', async (req: Request<{}, any, any, VehicleQuery>, res: R
           }
           // If not found in cache, continue to fetch from database
         } else {
+          const end = new Date();
+          const duration = end.getTime() - now.getTime();
+          console.log(`CacheDuration hit for key: ${cacheKey}, duration: ${duration}ms`);
           res.json(cachedData);
           return;
         }
@@ -349,42 +343,24 @@ app.get('/api/vehicles', async (req: Request<{}, any, any, VehicleQuery>, res: R
     const istStartTime = formatDateToIST(queryStartTime);
     const istEndTime = formatDateToIST(queryEndTime);
 
-    console.log(`Querying data from ${istStartTime} to ${istEndTime} (IST)`);
+    console.log(`Querying data from ${queryStartTime} to ${istEndTime} (IST)`);
 
     // Build the query - with deviceId filter if specified
     let query = `
-      SELECT 
-        deviceId,
-        vehicleNumber,
-        routeNumber,
-        provider,
-        toFloat64OrNull(toString(lat)) as lat,
-        toFloat64OrNull(toString(long)) as lng,
-        toString(timestamp) as timestamp
-      FROM atlas_kafka.amnex_direct_data
-      WHERE timestamp >= '${istStartTime}'
-        AND timestamp <= '${istEndTime}'
+      SELECT deviceId, vehicleNumber, routeNumber, provider, lat, long as lng, timestamp
+          FROM atlas_kafka.amnex_direct_data
+          WHERE timestamp > '${istStartTime}' AND timestamp <= '${istEndTime}'
+          ${deviceId ? `AND deviceId = '${deviceId}'` : ''};
     `;
-    
-    // Add deviceId filter if specified
-    if (deviceId) {
-      query += `\n  AND deviceId = '${deviceId}'`;
-    }
-    
-    query += `\nORDER BY timestamp DESC`;
     
     console.log("Executing ClickHouse query:", query);
 
     const result = await client.query({
       query,
-      query_params: {
-        start: istStartTime,
-        end: istEndTime
-      },
       format: 'JSONEachRow',
     });
 
-    const rawData = await result.json() as ClickHouseVehicleData[];
+    const rawData = await result.json() as any[];
     console.log(`Got ${rawData.length} points from ClickHouse`);
     
     // Group points by deviceId
@@ -425,6 +401,10 @@ app.get('/api/vehicles', async (req: Request<{}, any, any, VehicleQuery>, res: R
         timestamp
       });
     }
+
+    for (const vehicle of Object.values(deviceMap)) {
+      vehicle.trail.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+    }
     
     // Convert map to array and filter vehicles without trail points
     const data = Object.values(deviceMap).filter(vehicle => vehicle.trail.length > 0);
@@ -445,7 +425,9 @@ app.get('/api/vehicles', async (req: Request<{}, any, any, VehicleQuery>, res: R
       console.log(`Caching ${data.length} vehicles with TTL ${cacheTTL}ms for key: ${cacheKey}`);
       cache.set(cacheKey, data, cacheTTL);
     }
-    
+    const end = new Date();
+    const duration = end.getTime() - now.getTime();
+    console.log(`CacheDuration miss for key: ${cacheKey}, duration: ${duration}ms`);
     res.json(data);
   } catch (error) {
     console.error('Error fetching data:', error);
