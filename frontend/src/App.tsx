@@ -358,8 +358,8 @@ function App() {
     const localOffset = date.getTimezoneOffset();
     
     // IST is UTC+5:30, so offset is -330 minutes
-    const istOffset = -330;
-    
+    // const istOffset = -330;
+    const istOffset = 0;
     // Calculate the time difference in minutes
     const diff = istOffset - localOffset;
     
