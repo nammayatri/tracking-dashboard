@@ -133,7 +133,7 @@ declare global {
 }
 
 // Constants
-const API_BASE_URL = 'http://localhost:3001';
+const API_BASE_URL = 'https://api.moving.tech/tracking';
 const DEFAULT_MAP_CENTER = { lat: 12.9716, lng: 77.5946 }; // Default fallback if no vehicles
 const MAX_POINT_DISTANCE_KM = 0.5; // Maximum distance in km between consecutive points in a trail
 const REFRESH_INTERVAL = 5 * 60 * 1000; // 5 minutes refresh interval for general data
