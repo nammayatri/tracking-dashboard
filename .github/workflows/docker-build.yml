@@ -11,6 +11,7 @@ on:
 env:
   REGISTRY: ghcr.io
   FRONTEND_IMAGE_NAME: ${{ github.repository }}-frontend
+  FRONTEND_MINIMAL_IMAGE_NAME: ${{ github.repository }}-frontend-minimal
   BACKEND_IMAGE_NAME: ${{ github.repository }}-backend
   # Add environment variable to ignore TypeScript errors
   TSC_COMPILE_ON_ERROR: true
@@ -30,6 +31,10 @@ jobs:
           
       - name: Verify frontend dependencies
         working-directory: ./frontend
+        run: npm install
+      
+      - name: Verify frontend-minimal dependencies
+        working-directory: ./frontend-minimal
         run: npm install
           
       - name: Verify backend dependencies
@@ -70,6 +75,16 @@ jobs:
             type=sha,format=short
             type=raw,value=latest,enable={{is_default_branch}}
 
+      - name: Extract Docker metadata for frontend-minimal
+        id: meta-frontend-minimal
+        uses: docker/metadata-action@v4
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.FRONTEND_MINIMAL_IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=sha,format=short
+            type=raw,value=latest,enable={{is_default_branch}}
+
       - name: Extract Docker metadata for backend
         id: meta-backend
         uses: docker/metadata-action@v4
@@ -88,6 +103,20 @@ jobs:
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta-frontend.outputs.tags }}
           labels: ${{ steps.meta-frontend.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            NODE_ENV=production
+            TSC_COMPILE_ON_ERROR=true
+
+      # Build and push frontend-minimal image with build args and caching
+      - name: Build and push Frontend Minimal Docker image
+        uses: docker/build-push-action@v4
+        with:
+          context: ./frontend-minimal
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta-frontend-minimal.outputs.tags }}
+          labels: ${{ steps.meta-frontend-minimal.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           build-args: |

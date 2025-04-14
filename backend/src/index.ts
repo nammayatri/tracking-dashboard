@@ -4,6 +4,7 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import axios from 'axios';
 import { Pool } from 'pg';
+import { createClient as createRedisClient, RedisClientType } from 'redis';
 
 dotenv.config();
 
@@ -12,6 +13,17 @@ const port = process.env.PORT || 3001;
 
 app.use(cors());
 app.use(express.json());
+
+// Initialize Redis client
+const redisClient: RedisClientType = createRedisClient({
+  url: process.env.REDIS_URL || 'redis://localhost:6379',
+  database: 1
+});
+
+redisClient.on('error', (err: Error) => {
+  console.error('Redis Client Error:', err);
+});
+redisClient.connect().catch(console.error);
 
 // Cache implementation
 interface CacheEntry<T> {
@@ -151,7 +163,7 @@ async function refreshMappingTables() {
     
     // Fetch the vehicle to route mapping
     const vehicleRouteResult = await pgPool.query<VehicleRouteMapping>(
-      'SELECT vehicle_no, route_id FROM atlas_app.vehicle_route_mapping'
+      "SELECT vehicle_no, route_id FROM atlas_app.vehicle_route_mapping where integrated_bpp_config_id='9a4d28f2-f564-4a29-bceb-7c5efdb4a524';"
     );
     
     // Update the vehicle to route map
@@ -211,6 +223,43 @@ interface ClickHouseVehicleData {
   lat: number | null;
   lng: number | null;
   timestamp: string;
+}
+
+// Redis data types (in snake_case)
+interface RedisVehicleData {
+  device_id: string;
+  vehicle_number: string;
+  route_number: string;
+  route_id: string | null;
+  provider: string | null;
+  latitude: number;
+  longitude: number;
+  speed: number;
+  timestamp: number; // epoch timestamp
+  eta_data: Array<{
+    stop_name: string;
+    arrival_time: number; // epoch timestamp
+  }>;
+}
+
+// Function to convert Redis data to API response format
+function convertRedisToApiFormat(redisData: RedisVehicleData) {
+  return {
+    deviceId: redisData.device_id,
+    vehicleNumber: redisData.vehicle_number,
+    latitude: redisData.latitude,
+    longitude: redisData.longitude,
+    speed: redisData.speed,
+    timestamp: new Date(redisData.timestamp * 1000).toISOString(), // Convert epoch to ISO string
+    etaData: redisData.eta_data.map(eta => ({
+      stopName: eta.stop_name,
+      arrivalTime: new Date(eta.arrival_time * 1000).toLocaleTimeString('en-US', {
+        hour: 'numeric',
+        minute: '2-digit',
+        hour12: true
+      })
+    }))
+  };
 }
 
 // Time utility functions
@@ -630,6 +679,127 @@ app.post('/api/cache/invalidate', (req: Request, res: Response): void => {
   } catch (error) {
     console.error('Error invalidating cache:', error);
     res.status(500).json({ error: 'Failed to invalidate cache' });
+  }
+});
+
+interface RouteParams {
+  routeId: string;
+}
+
+interface RouteVehicle {
+  deviceId: string;
+  vehicleNumber: string;
+  routeId: string;
+  routeName: string;
+  provider: string | null;
+  lastSeen: string;
+  etaData: Array<{
+    stop_name: string;
+    arrival_time: number; // epoch timestamp
+  }>;
+  location: {
+    lat: number;
+    lng: number;
+  };
+  trail: Array<{
+    lat: number;
+    lng: number;
+    timestamp: string;
+  }>;
+}
+
+interface ErrorResponse {
+  error: string;
+}
+
+type RouteVehicleResponse = RouteVehicle[] | ErrorResponse;
+
+// API endpoint to fetch vehicles by route ID
+app.get<RouteParams, RouteVehicleResponse>('/api/route-vehicles/:routeId', async (req, res) => {
+  try {
+    const routeId = req.params.routeId;
+    const routeKey = `route:${routeId}`;
+    
+    const vehicles: RouteVehicle[] = [];
+    const deviceIds = new Set<string>();
+    const vehicleDataRaw = await redisClient.hGetAll(routeKey);
+    console.log("vehicleDataRaw", vehicleDataRaw)
+    // First get current locations from Redis
+    for (const vehicleNumber of Object.keys(vehicleDataRaw)) {
+      const data = vehicleDataRaw[vehicleNumber];
+      if (data) {
+        const vehicleData = JSON.parse(data);
+        if (vehicleData.route_id === routeId) {
+          deviceIds.add(vehicleData.device_id);
+          vehicles.push({
+            vehicleNumber: vehicleNumber,
+            deviceId: vehicleData.device_id,
+            routeId: vehicleData.route_id,
+            routeName: vehicleData.route_name,
+            provider: vehicleData.provider,
+            lastSeen: vehicleData.last_seen,
+            etaData: vehicleData.eta_data,
+            location: {
+              lat: vehicleData.latitude,
+              lng: vehicleData.longitude
+            },
+            trail: []
+          });
+        }
+      }
+    }
+
+    if (vehicles.length > 0) {
+      // Get trail data from ClickHouse for the last 30 minutes
+      const endTime = new Date();
+      const startTime = new Date(endTime.getTime() - 90 * 60 * 1000); // 90 minutes ago
+
+      const istStartTime = formatDateToIST(startTime);
+
+      const deviceIdsArray = Array.from(deviceIds);
+      const deviceIdsStr = deviceIdsArray.map(id => `'${id}'`).join(',');
+
+      const query = `
+        SELECT deviceId, lat, long as lng, timestamp
+        FROM atlas_kafka.amnex_direct_data
+        WHERE timestamp > '${istStartTime}'
+        AND deviceId IN (${deviceIdsStr})
+        AND lat != 0 AND long != 0
+        ORDER BY timestamp;
+      `;
+
+      const result = await client.query({
+        query,
+        format: 'JSONEachRow',
+      });
+
+      const trailData = await result.json() as any[];
+
+      // Group trail points by deviceId
+      const trailsByDevice: Record<string, Array<{lat: number, lng: number, timestamp: string}>> = {};
+      for (const point of trailData) {
+        if (!trailsByDevice[point.deviceId]) {
+          trailsByDevice[point.deviceId] = [];
+        }
+        trailsByDevice[point.deviceId].push({
+          lat: point.lat,
+          lng: point.lng,
+          timestamp: point.timestamp
+        });
+      }
+
+      // Add trail data to vehicles
+      for (const vehicle of vehicles) {
+        if (trailsByDevice[vehicle.deviceId]) {
+          vehicle.trail = trailsByDevice[vehicle.deviceId];
+        }
+      }
+    }
+
+    res.json(vehicles);
+  } catch (error) {
+    console.error('Error fetching route vehicles:', error);
+    res.status(500).json({ error: 'Failed to fetch route vehicles' });
   }
 });
 
