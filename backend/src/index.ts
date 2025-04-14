@@ -17,7 +17,10 @@ app.use(express.json());
 // Initialize Redis client
 const redisClient: RedisClientType = createRedisClient({
   url: process.env.REDIS_URL || 'redis://localhost:6379',
-  database: 1
+  database: 1,
+  socket: {
+    connectTimeout: 10 * 1000
+  }
 });
 
 redisClient.on('error', (err: Error) => {
@@ -90,9 +93,16 @@ interface VehicleRouteMapping {
   route_id: string;
 }
 
+interface Route {
+  integrated_bpp_config_id: string;
+  code: string;
+  short_name: string;
+}
+
 // Global caches for mapping tables to reduce database queries
 let deviceVehicleMap: Record<string, string> = {}; // device_id -> vehicle_no
 let vehicleRouteMap: Record<string, string> = {};  // vehicle_no -> route_id
+let routeCodeMap: Record<string, string[]> = {};  // short_name -> code[]
 let mappingTablesLastUpdated = 0;
 const MAPPING_TABLES_REFRESH_INTERVAL = 15 * 60 * 1000; // 15 minutes
 
@@ -149,7 +159,7 @@ async function refreshMappingTables() {
   try {
     // Fetch the device to vehicle mapping
     const deviceVehicleResult = await pgPool.query<DeviceVehicleMapping>(
-      'SELECT device_id, vehicle_no FROM atlas_app.device_vehicle_mapping'
+      'SELECT device_id, vehicle_no FROM atlas_app.device_vehicle_mapping;'
     );
     
     // Update the device to vehicle map
@@ -160,21 +170,37 @@ async function refreshMappingTables() {
     deviceVehicleMap = newDeviceVehicleMap;
     
     console.log(`Loaded ${Object.keys(deviceVehicleMap).length} device-to-vehicle mappings`);
-    
-    // Fetch the vehicle to route mapping
-    const vehicleRouteResult = await pgPool.query<VehicleRouteMapping>(
-      "SELECT vehicle_no, route_id FROM atlas_app.vehicle_route_mapping where integrated_bpp_config_id='9a4d28f2-f564-4a29-bceb-7c5efdb4a524';"
+
+    const routeResult = await pgPool.query<Route>(
+      "SELECT integrated_bpp_config_id, code, short_name FROM atlas_app.route where integrated_bpp_config_id = '9a4d28f2-f564-4a29-bceb-7c5efdb4a524';"
     );
     
-    // Update the vehicle to route map
-    const newVehicleRouteMap: Record<string, string> = {};
-    vehicleRouteResult.rows.forEach(row => {
-      newVehicleRouteMap[row.vehicle_no] = row.route_id;
+    // Update the route code map
+    const newRouteCodeMap: Record<string, string[]> = {};
+    routeResult.rows.forEach(row => {
+      if (!newRouteCodeMap[row.short_name]) {
+        newRouteCodeMap[row.short_name] = [];
+      }
+      newRouteCodeMap[row.short_name].push(row.code);
     });
-    vehicleRouteMap = newVehicleRouteMap;
+    routeCodeMap = newRouteCodeMap;
     
-    console.log(`Loaded ${Object.keys(vehicleRouteMap).length} vehicle-to-route mappings`);
+    console.log(`Loaded ${Object.keys(routeCodeMap).length} route mappings with ${routeResult.rowCount} total routes`);
     
+    // Fetch the vehicle to route mapping
+    // const vehicleRouteResult = await pgPool.query<VehicleRouteMapping>(
+    //   "SELECT vehicle_no, route_id FROM atlas_app.vehicle_route_mapping where integrated_bpp_config_id='9a4d28f2-f564-4a29-bceb-7c5efdb4a524';"
+    // );
+    
+    // // Update the vehicle to route map
+    // const newVehicleRouteMap: Record<string, string> = {};
+    // vehicleRouteResult.rows.forEach(row => {
+    //   newVehicleRouteMap[row.vehicle_no] = row.route_id;
+    // });
+    // vehicleRouteMap = newVehicleRouteMap;
+    
+    // console.log(`Loaded ${Object.keys(vehicleRouteMap).length} vehicle-to-route mappings`);
+
     // Update last refresh timestamp
     mappingTablesLastUpdated = now;
   } catch (error) {
@@ -745,6 +771,43 @@ app.get<RouteParams, RouteVehicleResponse>('/api/route-vehicles/:routeId', async
             },
             trail: []
           });
+        }
+      }
+    }
+
+    // If no vehicles found for the given routeId, check the route table
+    if (vehicles.length === 0 && routeCodeMap[routeId]) {
+      console.log(`No vehicles found for route ID ${routeId}, checking route codes`, routeCodeMap[routeId]);
+      
+      // Get all route codes for the given short_name
+      const routeCodes = routeCodeMap[routeId];
+      
+      // Check each route code in Redis
+      for (const routeCode of routeCodes) {
+        const alternateRouteKey = `route:${routeCode}`;
+        const alternateVehicleDataRaw = await redisClient.hGetAll(alternateRouteKey);
+        console.log(`Checking alternate route code ${routeCode}`, Object.keys(alternateVehicleDataRaw).length);
+        
+        for (const vehicleNumber of Object.keys(alternateVehicleDataRaw)) {
+          const data = alternateVehicleDataRaw[vehicleNumber];
+          if (data) {
+            const vehicleData = JSON.parse(data);
+            deviceIds.add(vehicleData.device_id);
+            vehicles.push({
+              vehicleNumber: vehicleNumber,
+              deviceId: vehicleData.device_id,
+              routeId: routeCode,
+              routeName: vehicleData.route_name || routeCode,
+              provider: vehicleData.provider,
+              lastSeen: vehicleData.last_seen,
+              etaData: vehicleData.eta_data || [],
+              location: {
+                lat: vehicleData.latitude,
+                lng: vehicleData.longitude
+              },
+              trail: []
+            });
+          }
         }
       }
     }
