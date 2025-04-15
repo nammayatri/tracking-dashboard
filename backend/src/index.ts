@@ -15,12 +15,19 @@ app.use(cors());
 app.use(express.json());
 
 // Initialize Redis client
-const redisClient: RedisClientType = createRedisClient({
+const redisClient = createRedisClient({
   url: process.env.REDIS_URL || 'redis://localhost:6379',
-  database: 1,
   socket: {
-    connectTimeout: 10 * 1000
-  }
+    connectTimeout: 10_000, // 10s timeout
+    reconnectStrategy: (retries) => {
+      if (retries > 5) {
+        console.error('[Redis] Retry limit exceeded');
+        return new Error('Retry limit exceeded');
+      }
+      return Math.min(100 * retries, 3000); // exponential backoff
+    },
+  },
+  database: 1,
 });
 
 redisClient.on('error', (err: Error) => {
@@ -815,7 +822,7 @@ app.get<RouteParams, RouteVehicleResponse>('/api/route-vehicles/:routeId', async
     if (vehicles.length > 0) {
       // Get trail data from ClickHouse for the last 30 minutes
       const endTime = new Date();
-      const startTime = new Date(endTime.getTime() - 90 * 60 * 1000); // 90 minutes ago
+      const startTime = new Date(endTime.getTime() - 30 * 60 * 1000); // 30 minutes ago
 
       const istStartTime = formatDateToIST(startTime);
 
@@ -827,6 +834,7 @@ app.get<RouteParams, RouteVehicleResponse>('/api/route-vehicles/:routeId', async
         FROM atlas_kafka.amnex_direct_data
         WHERE timestamp > '${istStartTime}'
         AND deviceId IN (${deviceIdsStr})
+        AND dataState IN ('LP', 'L', 'LO')
         AND lat != 0 AND long != 0
         ORDER BY timestamp;
       `;

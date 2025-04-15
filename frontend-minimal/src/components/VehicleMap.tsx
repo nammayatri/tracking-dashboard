@@ -142,9 +142,10 @@ const VehicleMap: React.FC<VehicleMapProps> = ({
       const color = vehicleColors[colorIndex];
       
       // Sort trail points by timestamp
-      const sortedTrail = [...vehicle.trail].sort((a, b) => {
-        return new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime();
-      });
+      const sortedTrail = [...vehicle.trail]
+      // const sortedTrail = [...vehicle.trail].sort((a, b) => {
+      //   return new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime();
+      // });
       
       return {
         ...vehicle,
@@ -157,13 +158,13 @@ const VehicleMap: React.FC<VehicleMapProps> = ({
 
   // Currently selected vehicle
   const selectedVehicle = useMemo(() => {
-    return processedVehicles.find(v => v.deviceId === selectedVehicleId) || null;
+    return processedVehicles.find(v => v.vehicleNumber === selectedVehicleId) || null;
   }, [processedVehicles, selectedVehicleId]);
 
   // Generate custom icons for each vehicle
   const vehicleIcons = useMemo(() => {
     return processedVehicles.map(vehicle => {
-      const isSelected = vehicle.deviceId === selectedVehicleId;
+      const isSelected = vehicle.vehicleNumber === selectedVehicleId;
       return {
         vehicle,
         icon: new L.DivIcon({
@@ -192,10 +193,10 @@ const VehicleMap: React.FC<VehicleMapProps> = ({
 
   // Effect to center map on selected vehicle
   useEffect(() => {
-    if (selectedVehicle && vehicles.length > 0) {
+    if (selectedVehicle) {
       setMapCenter([selectedVehicle.location.lat, selectedVehicle.location.lng]);
     }
-  }, [selectedVehicle, vehicles]);
+  }, [selectedVehicle]);
 
   // Playback trail functionality
   useEffect(() => {
@@ -332,11 +333,11 @@ const VehicleMap: React.FC<VehicleMapProps> = ({
         {/* Plot each vehicle on the map */}
         {vehicleIcons.map(({ vehicle, icon }) => (
           <Marker
-            key={vehicle.deviceId}
+            key={vehicle.vehicleNumber}
             position={[vehicle.location.lat, vehicle.location.lng]}
             icon={icon}
             eventHandlers={{
-              click: () => onSelectVehicle(vehicle.deviceId)
+              click: () => onSelectVehicle(vehicle.vehicleNumber)
             }}
           >
             <Popup>
@@ -379,7 +380,7 @@ const VehicleMap: React.FC<VehicleMapProps> = ({
             {/* Show smaller markers for each trail point */}
             {selectedVehicle.trail.map((point, index) => (
               <CircleMarker
-                key={`trail-${selectedVehicle.deviceId}-${index}`}
+                key={`trail-${selectedVehicle.vehicleNumber}-${index}`}
                 center={[point.lat, point.lng]}
                 radius={isPlaying || playbackIndex > 0 ? (index <= playbackIndex ? 3 : 0) : 3}
                 color={selectedVehicle.color}
@@ -418,7 +419,7 @@ const VehicleMap: React.FC<VehicleMapProps> = ({
             {/* Show ETA points if they exist */}
             {selectedVehicle.etaData && selectedVehicle.etaData.map((eta, index) => (
               <CircleMarker
-                key={`eta-${selectedVehicle.deviceId}-${index}`}
+                key={`eta-${selectedVehicle.vehicleNumber}-${index}`}
                 center={[eta.stop_lat, eta.stop_lon]}
                 radius={7}
                 color={etaColor}

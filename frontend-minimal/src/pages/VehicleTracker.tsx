@@ -74,17 +74,17 @@ const VehicleTracker: React.FC = () => {
 
   // Get the selected vehicle with color information
   const selectedVehicle = useMemo(() => {
-    return vehiclesWithColors.find(v => v.deviceId === selectedVehicleId) || null;
+    return vehiclesWithColors.find(v => v.vehicleNumber === selectedVehicleId) || null;
   }, [vehiclesWithColors, selectedVehicleId]);
 
   // Filtered vehicles to display on map - either all or just the selected one
   const vehiclesToDisplay = useMemo(() => {
     if (showAllVehicles) {
-      return vehicles;
+      return vehiclesWithColors;
     } else {
       return selectedVehicle ? [selectedVehicle] : [];
     }
-  }, [vehicles, selectedVehicle, showAllVehicles]);
+  }, [vehiclesWithColors, selectedVehicle, showAllVehicles]);
 
   const fetchVehicleData = async () => {
     if (!routeId) return;
@@ -102,26 +102,19 @@ const VehicleTracker: React.FC = () => {
         const newVehicles = response as RouteVehicle[];
         setVehicles(newVehicles);
         
-        // If this is the first load and we have vehicles, select the first one
-        if (newVehicles.length > 0 && !selectedVehicleId) {
-          setSelectedVehicleId(newVehicles[0].deviceId);
-        }
-        
-        // Auto-refresh behavior: maintain selected vehicle if possible
-        if (selectedVehicleId && enablePolling) {
-          const vehicleStillExists = newVehicles.some(v => v.deviceId === selectedVehicleId);
+        // Selection logic: preserve selection when possible
+        if (selectedVehicleId) {
+          // Check if current selection still exists in new data
+          const vehicleStillExists = newVehicles.some(v => v.vehicleNumber === selectedVehicleId);
           if (!vehicleStillExists && newVehicles.length > 0) {
-            // If the previously selected vehicle is no longer available, select the first one
-            setSelectedVehicleId(newVehicles[0].deviceId);
+            // If selected vehicle no longer exists, select the first one
+            console.log('Selected vehicle no longer exists, selecting first one');
+            setSelectedVehicleId(newVehicles[0].vehicleNumber);
           }
-          // Otherwise keep the current selection
-        } 
-        // Initial selection behavior (when not auto-refreshing)
-        else if (selectedVehicleId && !enablePolling) {
-          const vehicleStillExists = newVehicles.some(v => v.deviceId === selectedVehicleId);
-          if (!vehicleStillExists && newVehicles.length > 0) {
-            setSelectedVehicleId(newVehicles[0].deviceId);
-          }
+          // If vehicle still exists, keep current selection (do nothing)
+        } else if (newVehicles.length > 0) {
+          // If no vehicle was selected but we have vehicles, select the first one
+          setSelectedVehicleId(newVehicles[0].vehicleNumber);
         }
         
         setLastUpdated(new Date());
@@ -182,6 +175,7 @@ const VehicleTracker: React.FC = () => {
   };
 
   const handleSelectVehicle = (id: string) => {
+    console.log('Selecting vehicle', id);
     setSelectedVehicleId(id);
     // If we're in list view, automatically switch to map view
     if (activeTab === 1) {
@@ -647,7 +641,7 @@ const VehicleTracker: React.FC = () => {
               <Box sx={{ p: 3, display: 'flex', flexWrap: 'wrap', gap: 3, backgroundColor: alpha(theme.palette.background.default, 0.4) }}>
                 {vehiclesWithColors.map((vehicle) => (
                   <Box 
-                    key={vehicle.deviceId} 
+                    key={vehicle.vehicleNumber} 
                     sx={{ 
                       flex: '1 1 calc(50% - 24px)', 
                       minWidth: '280px',
@@ -657,15 +651,15 @@ const VehicleTracker: React.FC = () => {
                         transform: 'translateY(-4px)',
                       }
                     }}
-                    onClick={() => handleSelectVehicle(vehicle.deviceId)}
+                    onClick={() => handleSelectVehicle(vehicle.vehicleNumber)}
                   >
                     <Card sx={{ 
                       height: '100%',
                       borderRadius: 2,
-                      boxShadow: vehicle.deviceId === selectedVehicleId ? 
+                      boxShadow: vehicle.vehicleNumber === selectedVehicleId ? 
                         `0 8px 16px ${alpha(vehicle.color, 0.2)}` : theme.shadows[1],
                       borderTop: `4px solid ${vehicle.color}`,
-                      outline: vehicle.deviceId === selectedVehicleId ? 
+                      outline: vehicle.vehicleNumber === selectedVehicleId ? 
                         `2px solid ${alpha(vehicle.color, 0.5)}` : 'none',
                       transition: 'all 0.3s ease',
                     }}>
@@ -683,7 +677,7 @@ const VehicleTracker: React.FC = () => {
                               color: 'white', 
                               fontWeight: 'bold',
                               mr: 2,
-                              boxShadow: vehicle.deviceId === selectedVehicleId ?
+                              boxShadow: vehicle.vehicleNumber === selectedVehicleId ?
                                 `0 0 0 3px ${alpha(vehicle.color, 0.3)}` : 'none'
                             }}
                           >
