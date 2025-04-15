@@ -836,7 +836,8 @@ app.get<RouteParams, RouteVehicleResponse>('/api/route-vehicles/:routeId', async
         AND deviceId IN (${deviceIdsStr})
         AND dataState IN ('LP', 'L', 'LO')
         AND lat != 0 AND long != 0
-        ORDER BY timestamp;
+        ORDER BY timestamp desc
+        limit 50;
       `;
 
       const result = await client.query({
@@ -862,7 +863,7 @@ app.get<RouteParams, RouteVehicleResponse>('/api/route-vehicles/:routeId', async
       // Add trail data to vehicles
       for (const vehicle of vehicles) {
         if (trailsByDevice[vehicle.deviceId]) {
-          vehicle.trail = trailsByDevice[vehicle.deviceId];
+          vehicle.trail = trailsByDevice[vehicle.deviceId].reverse();
         }
       }
     }
