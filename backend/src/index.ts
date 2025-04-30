@@ -179,7 +179,7 @@ async function refreshMappingTables() {
     console.log(`Loaded ${Object.keys(deviceVehicleMap).length} device-to-vehicle mappings`);
 
     const routeResult = await pgPool.query<Route>(
-      "SELECT integrated_bpp_config_id, code, short_name FROM atlas_app.route where integrated_bpp_config_id = '9a4d28f2-f564-4a29-bceb-7c5efdb4a524';"
+      "SELECT integrated_bpp_config_id, code, short_name FROM atlas_app.route where integrated_bpp_config_id = 'b0454b15-9755-470d-a16a-71e87695e003';"
     );
     
     // Update the route code map
@@ -196,7 +196,7 @@ async function refreshMappingTables() {
     
     // Fetch the vehicle to route mapping
     // const vehicleRouteResult = await pgPool.query<VehicleRouteMapping>(
-    //   "SELECT vehicle_no, route_id FROM atlas_app.vehicle_route_mapping where integrated_bpp_config_id='9a4d28f2-f564-4a29-bceb-7c5efdb4a524';"
+    //   "SELECT vehicle_no, route_id FROM atlas_app.vehicle_route_mapping where integrated_bpp_config_id='b0454b15-9755-470d-a16a-71e87695e003';"
     // );
     
     // // Update the vehicle to route map
@@ -756,7 +756,7 @@ app.get<RouteParams, RouteVehicleResponse>('/api/route-vehicles/:routeId', async
     const vehicles: RouteVehicle[] = [];
     const deviceIds = new Set<string>();
     const vehicleDataRaw = await redisClient.hGetAll(routeKey);
-    console.log("vehicleDataRaw", vehicleDataRaw)
+    console.log("vehicleDataRaw", JSON.stringify(vehicleDataRaw))
     // First get current locations from Redis
     for (const vehicleNumber of Object.keys(vehicleDataRaw)) {
       const data = vehicleDataRaw[vehicleNumber];
