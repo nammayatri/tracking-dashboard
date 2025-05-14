@@ -830,14 +830,16 @@ app.get<RouteParams, RouteVehicleResponse>('/api/route-vehicles/:routeId', async
       const deviceIdsStr = deviceIdsArray.map(id => `'${id}'`).join(',');
 
       const query = `
-        SELECT deviceId, lat, long as lng, timestamp
-        FROM atlas_kafka.amnex_direct_data
-        WHERE timestamp > '${istStartTime}'
+        SELECT deviceId, lat, long as lng, timestamp 
+        FROM atlas_kafka.amnex_direct_data 
+        WHERE ( timestamp >= toStartOfDay(now64(9)) ) 
+        AND ( timestamp < toStartOfDay((now64(9) + INTERVAL 1 day)) ) 
+        AND ( serverTime >= toStartOfDay(now64(9)) ) 
+        AND ( serverTime < toStartOfDay((now64(9) + INTERVAL 1 day)) ) 
         AND deviceId IN (${deviceIdsStr})
         AND dataState IN ('LP', 'L', 'LO')
         AND lat != 0 AND long != 0
-        ORDER BY timestamp desc
-        limit 50;
+        ORDER BY timestamp DESC LIMIT 500;
       `;
 
       const result = await client.query({
