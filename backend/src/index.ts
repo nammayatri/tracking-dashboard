@@ -112,7 +112,7 @@ let vehicleRouteMap: Record<string, string> = {};  // vehicle_no -> route_id
 let routeCodeMap: Record<string, string[]> = {};  // short_name -> code[]
 let mappingTablesLastUpdated = 0;
 const MAPPING_TABLES_REFRESH_INTERVAL = 15 * 60 * 1000; // 15 minutes
-
+const BPP_INTEGRATED_ID = process.env.BPP_INTEGRATED_ID || "4f148691-12cc-42a7-b49e-f9bd86863fa1"
 // Initialize Clickhouse client
 const client = createClient({
   host: process.env.CLICKHOUSE_HOST || 'http://localhost:8123',
@@ -179,7 +179,7 @@ async function refreshMappingTables() {
     console.log(`Loaded ${Object.keys(deviceVehicleMap).length} device-to-vehicle mappings`);
 
     const routeResult = await pgPool.query<Route>(
-      "SELECT integrated_bpp_config_id, code, short_name FROM atlas_app.route where integrated_bpp_config_id = 'b0454b15-9755-470d-a16a-71e87695e003';"
+      "SELECT integrated_bpp_config_id, code, short_name FROM atlas_app.route where integrated_bpp_config_id = '" + BPP_INTEGRATED_ID + "';"
     );
     
     // Update the route code map
