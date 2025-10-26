@@ -247,54 +247,6 @@ interface VehicleData {
   }>;
 }
 
-// Define a type for the ClickHouse result to fix TypeScript errors
-interface ClickHouseVehicleData {
-  deviceId: string;
-  vehicleNumber: string | null;
-  routeNumber: string;
-  provider: string | null;
-  lat: number | null;
-  lng: number | null;
-  timestamp: string;
-}
-
-// Redis data types (in snake_case)
-interface RedisVehicleData {
-  device_id: string;
-  vehicle_number: string;
-  route_number: string;
-  route_id: string | null;
-  provider: string | null;
-  latitude: number;
-  longitude: number;
-  speed: number;
-  timestamp: number; // epoch timestamp
-  eta_data: Array<{
-    stop_name: string;
-    arrival_time: number; // epoch timestamp
-  }>;
-}
-
-// Function to convert Redis data to API response format
-function convertRedisToApiFormat(redisData: RedisVehicleData) {
-  return {
-    deviceId: redisData.device_id,
-    vehicleNumber: redisData.vehicle_number,
-    latitude: redisData.latitude,
-    longitude: redisData.longitude,
-    speed: redisData.speed,
-    timestamp: new Date(redisData.timestamp * 1000).toISOString(), // Convert epoch to ISO string
-    etaData: redisData.eta_data.map(eta => ({
-      stopName: eta.stop_name,
-      arrivalTime: new Date(eta.arrival_time * 1000).toLocaleTimeString('en-US', {
-        hour: 'numeric',
-        minute: '2-digit',
-        hour12: true
-      })
-    }))
-  };
-}
-
 // Time utility functions
 function formatDateToIST(date: Date): string {
   const istT = convertToIST(date)
@@ -715,6 +667,30 @@ app.post('/api/cache/invalidate', (req: Request, res: Response): void => {
   }
 });
 
+// API endpoint to invalidate vehicle tracking cache specifically
+app.post('/api/cache/invalidate-vehicle-tracking', (req: Request, res: Response): void => {
+  try {
+    const { type } = req.body; // 'fresh', 'cached', or 'all'
+    
+    if (type === 'fresh') {
+      cache.invalidate('vehicle_tracking_fresh');
+      res.json({ success: true, message: 'Fresh vehicle tracking cache invalidated' });
+    } else if (type === 'cached') {
+      cache.invalidate('vehicle_tracking_cached');
+      res.json({ success: true, message: 'Cached vehicle tracking cache invalidated' });
+    } else if (type === 'all') {
+      cache.invalidate('vehicle_tracking_fresh');
+      cache.invalidate('vehicle_tracking_cached');
+      res.json({ success: true, message: 'All vehicle tracking cache invalidated' });
+    } else {
+      res.status(400).json({ error: 'Invalid type. Must be "fresh", "cached", or "all"' });
+    }
+  } catch (error) {
+    console.error('Error invalidating vehicle tracking cache:', error);
+    res.status(500).json({ error: 'Failed to invalidate vehicle tracking cache' });
+  }
+});
+
 interface RouteParams {
   routeId: string;
 }
@@ -746,6 +722,204 @@ interface ErrorResponse {
 }
 
 type RouteVehicleResponse = RouteVehicle[] | ErrorResponse;
+
+// Vehicle tracking response type
+interface VehicleTrackingData {
+  vehicleNo: string;
+  deviceId: string;
+  routeId: string;
+  routeNumber: string;
+  latitude: number;
+  longitude: number;
+  timestamp: number;
+}
+
+// Fresh pull data type from Redis route keys
+interface FreshPullVehicleData {
+  device_id: string;
+  eta_data: Array<{
+    arrival_time: number;
+    calculation_method: string;
+    stop_id: string;
+    stop_lat: number;
+    stop_lon: number;
+    stop_name: string;
+    stop_seq: number;
+  }>;
+  latitude: number;
+  longitude: number;
+  route_id: string;
+  route_number: string;
+  route_state: string;
+  server_time: number;
+  speed: number;
+  stop_sequence: number | null;
+  timestamp: number;
+  unmatched_count: number;
+  vehicle_number: string;
+  visited_stop_info: any;
+  visited_stops: any[];
+}
+
+// Cached pull data type from bus_metadata_v2
+interface CachedPullVehicleData {
+  device_id: string;
+  last_updated: number;
+  latitude: number;
+  longitude: number;
+  routes_info: Record<string, {
+    route_id: string;
+    route_number: string;
+    route_state: string;
+    stop_sequence: number | null;
+    timestamp: number;
+    unmatched_count: number;
+  }>;
+  speed: number;
+  timestamp: number;
+  vehicle_number: string;
+}
+
+
+// API endpoint for vehicle tracking
+app.get('/api/vehicle-tracking', async (req: Request, res: Response): Promise<void> => {
+  try {
+    console.log('Vehicle tracking request - unified approach');
+    
+    // Single cache key for unified approach
+    const cacheKey = 'vehicle_tracking_unified';
+    
+    // Check cache first
+    const cachedData = cache.get<VehicleTrackingData[]>(cacheKey);
+    if (cachedData) {
+      console.log(`Returning cached vehicle tracking data (${cachedData.length} vehicles)`);
+      res.json(cachedData);
+      return;
+    }
+
+    console.log('Starting unified vehicle tracking from route keys...');
+    
+    // Get all route keys using SCAN
+    const routeKeys: string[] = [];
+    let cursor = '0';
+    
+    do {
+      const scanResult = await redisClient.scan(parseInt(cursor), {
+        MATCH: 'route:*',
+        COUNT: 500
+      });
+      cursor = scanResult.cursor.toString();
+      routeKeys.push(...scanResult.keys);
+    } while (cursor !== '0');
+    
+    console.log(`Found ${routeKeys.length} route keys in Redis`);
+    
+    let vehicleData: VehicleTrackingData[] = [];
+    
+    if (routeKeys.length === 0) {
+      vehicleData = [];
+    } else {
+      // Process route keys in batches of 100 in parallel
+      const batchSize = 100;
+      const allVehicleData: FreshPullVehicleData[] = [];
+      
+      // Create batches
+      const batches: string[][] = [];
+      for (let i = 0; i < routeKeys.length; i += batchSize) {
+        batches.push(routeKeys.slice(i, i + batchSize));
+      }
+      
+      console.log(`Processing ${batches.length} batches of route keys in parallel...`);
+      
+      // Process all batches in parallel
+      const batchPromises = batches.map(async (batch) => {
+        const pipeline = redisClient.multi();
+        
+        // Add HGETALL commands for each route key in the batch
+        batch.forEach(routeKey => {
+          pipeline.hGetAll(routeKey);
+        });
+        
+        const results = await pipeline.exec();
+        const batchVehicleData: FreshPullVehicleData[] = [];
+        
+        // Process results
+        if (results) {
+          for (let i = 0; i < results.length; i++) {
+            const result = results[i];
+            if (result && !(result instanceof Error)) {
+              const routeData = result as unknown as Record<string, string>;
+              
+              // Process each vehicle in this route
+              for (const [vehicleNumber, vehicleDataStr] of Object.entries(routeData)) {
+                try {
+                  const vehicleData: FreshPullVehicleData = JSON.parse(vehicleDataStr);
+                  batchVehicleData.push(vehicleData);
+                } catch (parseError) {
+                  console.error(`Error parsing vehicle data for ${vehicleNumber}:`, parseError);
+                }
+              }
+            }
+          }
+        }
+        
+        return batchVehicleData;
+      });
+      
+      // Wait for all batches to complete and collect results
+      const batchResults = await Promise.all(batchPromises);
+      batchResults.forEach(batchData => {
+        allVehicleData.push(...batchData);
+      });
+      
+      console.log(`Retrieved ${allVehicleData.length} vehicle records from Redis`);
+      
+      // Filter vehicles that DON'T start with "OD" and are not older than 30 minutes
+      const currentTime = Math.floor(Date.now() / 1000); // Current time in seconds
+      const thirtyMinutesAgo = currentTime - (30 * 60); // 30 minutes ago in seconds
+      
+      const nonODVehicles = allVehicleData.filter(vehicle => {
+        const isNotODVehicle = vehicle.vehicle_number && !vehicle.vehicle_number.startsWith('OD');
+        const isRecent = vehicle.timestamp >= thirtyMinutesAgo;
+        
+        if (!isRecent) {
+          console.log(`Filtering out old vehicle ${vehicle.vehicle_number} with timestamp ${vehicle.timestamp} (${Math.floor((currentTime - vehicle.timestamp) / 60)} minutes old)`);
+        }
+        
+        return isNotODVehicle && isRecent;
+      });
+      
+      console.log(`Found ${nonODVehicles.length} recent vehicles NOT starting with "OD" (filtered out ${allVehicleData.filter(v => v.vehicle_number && !v.vehicle_number.startsWith('OD')).length - nonODVehicles.length} old vehicles)`);
+      
+      // Convert to response format
+      vehicleData = nonODVehicles.map(vehicle => ({
+        vehicleNo: vehicle.vehicle_number,
+        deviceId: vehicle.device_id,
+        routeId: vehicle.route_id,
+        routeNumber: vehicle.route_number,
+        latitude: vehicle.latitude,
+        longitude: vehicle.longitude,
+        timestamp: vehicle.timestamp
+      }));
+    }
+
+    console.log(`Returning ${vehicleData.length} vehicle tracking records`);
+    
+    // Cache the response with 9 seconds TTL
+    const ttl = 9 * 1000; // 9 seconds
+    cache.set(cacheKey, vehicleData, ttl);
+    console.log(`Cached vehicle tracking data with TTL ${ttl}ms`);
+    
+    res.json(vehicleData);
+    
+  } catch (error) {
+    console.error('Error in vehicle tracking API:', error);
+    res.status(500).json({ 
+      error: 'Failed to fetch vehicle tracking data',
+      message: error instanceof Error ? error.message : 'Unknown error'
+    });
+  }
+});
 
 // API endpoint to fetch vehicles by route ID
 app.get<RouteParams, RouteVehicleResponse>('/api/route-vehicles/:routeId', async (req, res) => {

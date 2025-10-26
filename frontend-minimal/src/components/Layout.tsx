@@ -79,7 +79,20 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
                   px: 2
                 }}
               >
-                Tracker
+                Route Tracker
+              </Button>
+              <Button 
+                color="inherit" 
+                component={RouterLink} 
+                to="/tracking" 
+                sx={{ 
+                  mr: 2,
+                  fontWeight: 500,
+                  borderRadius: 2,
+                  px: 2
+                }}
+              >
+                Live Tracking
               </Button>
               <Button 
                 color="inherit" 

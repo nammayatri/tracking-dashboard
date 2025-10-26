@@ -4,6 +4,7 @@ import { ThemeProvider, CssBaseline } from '@mui/material';
 import { createTheme } from '@mui/material/styles';
 import Home from './pages/Home';
 import VehicleTracker from './pages/VehicleTracker';
+import VehicleTracking from './pages/VehicleTracking';
 
 // Create a custom Material theme
 const theme = createTheme({
@@ -101,6 +102,7 @@ function App() {
       <Router>
         <Routes>
           <Route path="/" element={<VehicleTracker />} />
+          <Route path="/tracking" element={<VehicleTracking />} />
           <Route path="/about" element={<Home />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

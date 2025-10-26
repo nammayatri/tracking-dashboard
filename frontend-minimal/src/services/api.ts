@@ -36,4 +36,15 @@ api.interceptors.response.use(
   }
 );
 
-export default api; 
+export default api;
+
+// Vehicle tracking API functions
+export const getVehicleTracking = async () => {
+  try {
+    const response = await api.get('/api/vehicle-tracking');
+    return response.data;
+  } catch (error) {
+    console.error('Error fetching vehicle tracking data:', error);
+    throw error;
+  }
+};

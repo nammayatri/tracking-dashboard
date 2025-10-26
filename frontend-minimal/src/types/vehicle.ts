@@ -31,4 +31,24 @@ export interface ErrorResponse {
   message: string;
 }
 
-export type RouteVehicleResponse = RouteVehicle[] | ErrorResponse; 
+export type RouteVehicleResponse = RouteVehicle[] | ErrorResponse;
+
+// Vehicle tracking types
+export interface VehicleTrackingData {
+  vehicleNo: string;
+  deviceId: string;
+  routeId: string;
+  routeNumber: string;
+  latitude: number;
+  longitude: number;
+  timestamp: number;
+}
+
+export interface VehicleTrackingSummary {
+  recent: number;      // < 1 minute
+  moderate: number;    // 1-5 minutes
+  old: number;         // > 5 minutes
+  total: number;
+}
+
+export type VehicleTrackingResponse = VehicleTrackingData[] | ErrorResponse; 
