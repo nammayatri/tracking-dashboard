@@ -168,6 +168,12 @@ const VehicleMarker = ({
               </Typography>
             </Box>
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+              <InfoIcon fontSize="small" color="action" />
+              <Typography variant="body2">
+                Device ID: {vehicle.deviceId}
+              </Typography>
+            </Box>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
               <AccessTimeIcon fontSize="small" color="action" />
               <Typography variant="body2">
                 Last ping: {new Date(vehicle.timestamp * 1000).toLocaleString()}
@@ -337,24 +343,42 @@ const VehicleTracking: React.FC = () => {
 
   // Filter vehicles based on search term
   const filteredVehicles = useMemo(() => {
-    if (!searchTerm.trim()) return vehicles;
+    console.log('Filtering vehicles - searchTerm:', searchTerm, 'filterType:', filterType, 'total vehicles:', vehicles.length);
+    console.log('All vehicles sample:', vehicles.slice(0, 5).map(v => v.vehicleNo));
     
-    return vehicles.filter(vehicle => {
-      const searchValue = searchTerm;
-      if (vehicle.vehicleNo === searchValue) {
-        console.log(searchValue, filterType, vehicle.vehicleNo)
-      }
+    if (!searchTerm.trim()) {
+      console.log('No search term, returning all vehicles');
+      return vehicles;
+    }
+    
+    const filtered = vehicles.filter(vehicle => {
+      const searchValue = searchTerm.toLowerCase().trim();
+      let matches = false;
+      
       switch (filterType) {
         case 'vehicleNo':
-          return vehicle.vehicleNo === searchValue;
+          matches = vehicle.vehicleNo.toLowerCase() === searchValue;
+          break;
         case 'routeId':
-          return vehicle.routeId === searchValue;
+          matches = vehicle.routeId.toLowerCase() === searchValue;
+          break;
         case 'routeNumber':
-          return vehicle.routeNumber === searchValue;
+          matches = vehicle.routeNumber.toLowerCase() === searchValue;
+          break;
         default:
-          return true;
+          matches = true;
       }
+      
+      if (matches) {
+        console.log('Vehicle matches:', vehicle.vehicleNo, 'filterType:', filterType, 'searchValue:', searchValue);
+      }
+      
+      return matches;
     });
+    
+    console.log(`Search: "${searchTerm}" | Filter: ${filterType} | Found: ${filtered.length}/${vehicles.length} vehicles`);
+    console.log('Filtered vehicles:', filtered.map(v => v.vehicleNo));
+    return filtered;
   }, [vehicles, searchTerm, filterType]);
 
   // Calculate summary statistics based on filtered vehicles
@@ -688,14 +712,21 @@ const VehicleTracking: React.FC = () => {
                 attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
               />
               
-              {filteredVehicles.map((vehicle) => (
-                <VehicleMarker
-                  key={vehicle.vehicleNo}
-                  vehicle={vehicle}
-                  onHover={handleVehicleHover}
-                  onLeave={handleVehicleLeave}
-                />
-              ))}
+              {(() => {
+                console.log('About to render markers. filteredVehicles length:', filteredVehicles.length);
+                console.log('filteredVehicles:', filteredVehicles.map(v => v.vehicleNo));
+                return filteredVehicles.map((vehicle, index) => {
+                  console.log('Rendering vehicle:', vehicle.vehicleNo, 'for search:', searchTerm, 'index:', index);
+                  return (
+                    <VehicleMarker
+                      key={`${vehicle.vehicleNo}-${searchTerm}-${index}`}
+                      vehicle={vehicle}
+                      onHover={handleVehicleHover}
+                      onLeave={handleVehicleLeave}
+                    />
+                  );
+                });
+              })()}
             </MapContainer>
           </Box>
 
