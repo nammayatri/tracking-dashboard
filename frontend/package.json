@@ -16,7 +16,7 @@
     "@mui/material": "^5.15.10",
     "@mui/x-date-pickers": "^6.19.4",
     "@types/leaflet": "^1.9.8",
-    "axios": "^1.6.7",
+    "axios": "^1.13.5",
     "date-fns": "^2.30.0",
     "leaflet": "^1.9.4",
     "react": "^18.2.0",
