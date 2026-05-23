@@ -23,7 +23,7 @@ spec:
     spec:
       containers:
       - name: tracking-debug-frontend-minimal-master
-        image: 463356420488.dkr.ecr.ap-south-1.amazonaws.com/tracking-debug-frontend-minimal-master:<IMAGE_TAG>
+        image: ghcr.io/nammayatri/tracking-debug-frontend-minimal-master:<IMAGE_TAG>
         imagePullPolicy: Always
         ports:
         - containerPort: 3000
