@@ -1,0 +1,15 @@
+# NOTE: Full frontend is NOT deployed in UAT for now. File kept ready.
+apiVersion: v1
+kind: Service
+metadata:
+  name: tracking-debug-frontend-master
+  namespace: atlas
+spec:
+  type: ClusterIP
+  selector:
+    app: tracking-debug-frontend-master
+  ports:
+  - name: http
+    port: 3000
+    targetPort: 3000
+    protocol: TCP
