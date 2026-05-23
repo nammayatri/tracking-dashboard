@@ -1,0 +1,100 @@
+name: UAT Build & Push (GHCR)
+
+on:
+  push:
+    branches: [uat]
+  workflow_dispatch:
+    inputs:
+      components:
+        description: 'Comma-separated subset of: backend,frontend,frontend-minimal (push events build all 3)'
+        required: true
+        default: 'backend,frontend,frontend-minimal'
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: ghcr.io/${{ github.repository_owner }}/tracking-debug
+  API_BASE_URL: https://api.sandbox.moving.tech/tracking
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        component: [backend, frontend, frontend-minimal]
+    steps:
+      - name: Skip if component not selected
+        id: gate
+        run: |
+          # Push events: build everything. workflow_dispatch: honor inputs.components.
+          SELECTED="${{ inputs.components }}"
+          if [ -z "$SELECTED" ]; then
+            SELECTED="backend,frontend,frontend-minimal"
+          fi
+          if echo "$SELECTED" | tr ',' '\n' | grep -qx "${{ matrix.component }}"; then
+            echo "selected=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "selected=false" >> "$GITHUB_OUTPUT"
+            echo "Skipping ${{ matrix.component }} — not in '$SELECTED'"
+          fi
+
+      - if: steps.gate.outputs.selected == 'true'
+        uses: actions/checkout@v4
+
+      - if: steps.gate.outputs.selected == 'true'
+        name: Compute 6-char SHA
+        id: sha
+        run: echo "short=${GITHUB_SHA:0:6}" >> "$GITHUB_OUTPUT"
+
+      - if: steps.gate.outputs.selected == 'true'
+        uses: docker/setup-buildx-action@v3
+
+      - if: steps.gate.outputs.selected == 'true'
+        name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - if: steps.gate.outputs.selected == 'true'
+        name: Resolve build args
+        id: args
+        run: |
+          case "${{ matrix.component }}" in
+            backend)
+              echo "build_args<<EOF" >> "$GITHUB_OUTPUT"
+              echo "NODE_ENV=production" >> "$GITHUB_OUTPUT"
+              echo "EOF" >> "$GITHUB_OUTPUT"
+              ;;
+            frontend)
+              echo "build_args<<EOF" >> "$GITHUB_OUTPUT"
+              echo "NODE_ENV=production" >> "$GITHUB_OUTPUT"
+              echo "VITE_API_URL=${API_BASE_URL}" >> "$GITHUB_OUTPUT"
+              echo "VITE_BASE_URL=${API_BASE_URL}" >> "$GITHUB_OUTPUT"
+              echo "EOF" >> "$GITHUB_OUTPUT"
+              ;;
+            frontend-minimal)
+              echo "build_args<<EOF" >> "$GITHUB_OUTPUT"
+              echo "NODE_ENV=production" >> "$GITHUB_OUTPUT"
+              echo "REACT_APP_API_BASE_URL=${API_BASE_URL}" >> "$GITHUB_OUTPUT"
+              echo "EOF" >> "$GITHUB_OUTPUT"
+              ;;
+          esac
+
+      - if: steps.gate.outputs.selected == 'true'
+        name: Build and push ${{ matrix.component }}
+        uses: docker/build-push-action@v6
+        with:
+          context: ./${{ matrix.component }}
+          push: true
+          tags: |
+            ${{ env.IMAGE_PREFIX }}-${{ matrix.component }}-master:${{ steps.sha.outputs.short }}
+            ${{ env.IMAGE_PREFIX }}-${{ matrix.component }}-master:uat-latest
+          build-args: ${{ steps.args.outputs.build_args }}
+          cache-from: type=gha,scope=uat-${{ matrix.component }}
+          cache-to: type=gha,scope=uat-${{ matrix.component }},mode=max

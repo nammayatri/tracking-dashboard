@@ -24,7 +24,7 @@ spec:
     spec:
       containers:
       - name: tracking-debug-frontend-master
-        image: 463356420488.dkr.ecr.ap-south-1.amazonaws.com/tracking-debug-frontend-master:<IMAGE_TAG>
+        image: ghcr.io/nammayatri/tracking-debug-frontend-master:<IMAGE_TAG>
         imagePullPolicy: Always
         ports:
         - containerPort: 3000
@@ -32,9 +32,9 @@ spec:
           protocol: TCP
         env:
         - name: VITE_API_URL
-          value: https://api.sandbox.moving.tech/tracking-debug-api
+          value: https://api.sandbox.moving.tech/tracking
         - name: VITE_BASE_URL
-          value: https://api.sandbox.moving.tech/tracking-debug-api
+          value: https://api.sandbox.moving.tech/tracking
         - name: NODE_ENV
           value: production
         - name: PORT

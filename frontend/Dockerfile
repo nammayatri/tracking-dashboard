@@ -12,6 +12,14 @@ RUN npm install
 # Copy all files
 COPY . .
 
+# Build-time args (Vite inlines VITE_* envs into the bundle)
+ARG VITE_API_URL
+ARG VITE_BASE_URL
+ARG NODE_ENV=production
+ENV VITE_API_URL=$VITE_API_URL
+ENV VITE_BASE_URL=$VITE_BASE_URL
+ENV NODE_ENV=$NODE_ENV
+
 # Build the app
 RUN npm run build
 

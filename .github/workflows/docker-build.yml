@@ -18,6 +18,8 @@ env:
 
 jobs:
   verify-dependencies:
+    # Skip when triggered from the uat branch (handled by uat.yml).
+    if: github.ref != 'refs/heads/uat' && github.head_ref != 'uat'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -42,6 +44,7 @@ jobs:
         run: npm install
 
   build-and-push:
+    if: github.ref != 'refs/heads/uat' && github.head_ref != 'uat'
     needs: verify-dependencies
     runs-on: ubuntu-latest
     permissions:

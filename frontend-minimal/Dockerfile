@@ -12,6 +12,12 @@ RUN npm install
 # Copy all files
 COPY . .
 
+# Build-time args (CRA inlines REACT_APP_* envs into the bundle)
+ARG REACT_APP_API_BASE_URL
+ARG NODE_ENV=production
+ENV REACT_APP_API_BASE_URL=$REACT_APP_API_BASE_URL
+ENV NODE_ENV=$NODE_ENV
+
 # Build the app
 RUN npm run build
 
