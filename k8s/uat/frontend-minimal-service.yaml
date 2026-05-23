@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: tracking-debug-frontend-minimal-master
+  namespace: atlas
+spec:
+  type: ClusterIP
+  selector:
+    app: tracking-debug-frontend-minimal-master
+  ports:
+  - name: http
+    port: 3000
+    targetPort: 3000
+    protocol: TCP
