@@ -99,10 +99,10 @@ function App() {
   return (
     <ThemeProvider theme={theme}>
       <CssBaseline />
-      <Router>
+      <Router basename={process.env.PUBLIC_URL}>
         <Routes>
           <Route path="/" element={<VehicleTracker />} />
-          <Route path="/tracking" element={<VehicleTracking />} />
+          <Route path="/live" element={<VehicleTracking />} />
           <Route path="/about" element={<Home />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
