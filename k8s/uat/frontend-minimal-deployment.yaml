@@ -1,0 +1,49 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tracking-debug-frontend-minimal-master
+  namespace: atlas
+  labels:
+    app: tracking-debug-frontend-minimal-master
+spec:
+  replicas: 1
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels:
+      app: tracking-debug-frontend-minimal-master
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 25%
+      maxUnavailable: 25%
+  template:
+    metadata:
+      labels:
+        app: tracking-debug-frontend-minimal-master
+    spec:
+      containers:
+      - name: tracking-debug-frontend-minimal-master
+        image: ghcr.io/nammayatri/tracking-debug-frontend-minimal-master:<IMAGE_TAG>
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 3000
+          name: http
+          protocol: TCP
+        env:
+        - name: REACT_APP_API_BASE_URL
+          value: https://api.sandbox.moving.tech/tracking-debug-api
+        - name: OSRM_SERVER
+          value: https://router.project-osrm.org
+        - name: NODE_ENV
+          value: production
+        - name: PORT
+          value: "3000"
+        resources:
+          requests:
+            cpu: 200m
+            memory: 256Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+      restartPolicy: Always
+      terminationGracePeriodSeconds: 30

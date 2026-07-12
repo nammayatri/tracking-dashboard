@@ -1,0 +1,50 @@
+# NOTE: Full frontend is NOT deployed in UAT for now. File kept ready.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tracking-debug-frontend-master
+  namespace: atlas
+  labels:
+    app: tracking-debug-frontend-master
+spec:
+  replicas: 1
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels:
+      app: tracking-debug-frontend-master
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 25%
+      maxUnavailable: 25%
+  template:
+    metadata:
+      labels:
+        app: tracking-debug-frontend-master
+    spec:
+      containers:
+      - name: tracking-debug-frontend-master
+        image: ghcr.io/nammayatri/tracking-debug-frontend-master:<IMAGE_TAG>
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 3000
+          name: http
+          protocol: TCP
+        env:
+        - name: VITE_API_URL
+          value: https://api.sandbox.moving.tech/tracking-debug-api
+        - name: VITE_BASE_URL
+          value: https://api.sandbox.moving.tech/tracking-debug-api
+        - name: NODE_ENV
+          value: production
+        - name: PORT
+          value: "3000"
+        resources:
+          requests:
+            cpu: 200m
+            memory: 256Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+      restartPolicy: Always
+      terminationGracePeriodSeconds: 30
